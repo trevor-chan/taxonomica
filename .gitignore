@@ -50,6 +50,7 @@ htmlcov/
 
 # Data files (large, downloaded separately)
 wikipedia-en-dwca/
+backbone/
 *.txt
 !requirements.txt
 
