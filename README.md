@@ -1,10 +1,14 @@
 # Taxonomica
 
-A taxonomy-based guessing game that lets you explore the tree of life through a 20-questions style experience focused on taxonomic groupings.
+Explore the tree of life.
 
 ## Overview
 
 Taxonomica uses data from Wikipedia's species pages to create an interactive game where players guess organisms by navigating through taxonomic classifications (Kingdom → Phylum → Class → Order → Family → Genus → Species).
+
+## Gameplay
+
+A game of Taxonomica begins with the text (and optionally image) from a species page displayed. Any critical information (the species scientific name, vernacular name, and any taxonomic designations) will initially be redacted. The goal of the player is to make their way up the tree of life, beginning at the domain level, in order to determine the species. As they make their way up the tree, additional information will become available.
 
 ## Installation
 
