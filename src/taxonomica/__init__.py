@@ -24,6 +24,21 @@ from taxonomica.gbif_backbone import (
 from taxonomica.gbif_tree import GBIFTaxonomyTree
 from taxonomica.gbif_tree import TaxonomyNode as GBIFTaxonomyNode
 
+# Wikipedia description loader
+from taxonomica.wikipedia import (
+    WikipediaData,
+    WikipediaDescription,
+    WikipediaSpecies,
+)
+
+# Redaction engine for gameplay
+from taxonomica.redaction import (
+    Redactor,
+    RedactionTerms,
+    build_redaction_terms_from_node,
+    build_redaction_terms_manual,
+)
+
 __all__ = [
     # Wikipedia DwC-A
     "DarwinCoreArchive",
@@ -42,5 +57,14 @@ __all__ = [
     "GBIFTaxonomyNode",
     "GBIFTaxonomyTree",
     "GBIFVernacularName",
+    # Wikipedia descriptions
+    "WikipediaData",
+    "WikipediaDescription",
+    "WikipediaSpecies",
+    # Redaction
+    "Redactor",
+    "RedactionTerms",
+    "build_redaction_terms_from_node",
+    "build_redaction_terms_manual",
 ]
 

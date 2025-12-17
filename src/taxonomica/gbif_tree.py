@@ -192,9 +192,26 @@ class GBIFTaxonomyTree:
         """Find a node by its GBIF taxon ID."""
         return self._nodes_by_id.get(taxon_id)
 
-    def find_by_name(self, name: str) -> list[TaxonomyNode]:
-        """Find all nodes with the given name."""
-        return self._nodes_by_name.get(name, [])
+    def find_by_name(self, name: str, case_sensitive: bool = True) -> list[TaxonomyNode]:
+        """Find all nodes with the given name.
+        
+        Args:
+            name: The name to search for.
+            case_sensitive: If False, performs case-insensitive matching.
+            
+        Returns:
+            List of matching nodes.
+        """
+        if case_sensitive:
+            return self._nodes_by_name.get(name, [])
+        
+        # Case-insensitive search
+        name_lower = name.lower()
+        results = []
+        for stored_name, nodes in self._nodes_by_name.items():
+            if stored_name.lower() == name_lower:
+                results.extend(nodes)
+        return results
 
     @classmethod
     def from_backbone(
