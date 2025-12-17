@@ -108,9 +108,9 @@ class TreeExplorer:
         total_pages = (total_children + self.page_size - 1) // self.page_size if total_children > 0 else 1
         total_unfiltered = len(self.current_node.children)
 
-        print("=" * 70)
+        print("=" * 100)
         print("  GBIF TAXONOMY TREE EXPLORER")
-        print("=" * 70)
+        print("=" * 100)
         print()
 
         depth = len(self.current_node.get_ancestors())
@@ -147,7 +147,7 @@ class TreeExplorer:
         print(f"  Sorting: {sort_name}  |  Filter: {filter_status}")
 
         print()
-        print("-" * 70)
+        print("-" * 100)
 
         if total_children == 0:
             print()
@@ -158,7 +158,7 @@ class TreeExplorer:
             end_idx = min(start_idx + self.page_size, total_children)
             page_children = children[start_idx:end_idx]
 
-            print(f"\n  Children:                                      (✓ = complete taxonomic path)")
+            print(f"\n  Children:                                                        (✓ = complete path)")
             print()
 
             for i, child in enumerate(page_children):
@@ -167,9 +167,16 @@ class TreeExplorer:
                 rank_str = f"[{child.rank}]" if child.rank else ""
                 child_info = f"({child_desc:,})" if child_desc > 0 else "(leaf)"
                 complete_marker = "✓" if child.has_complete_path() else " "
-                name_display = child.name[:36] if len(child.name) > 36 else child.name
-
-                print(f"  {complete_marker} ({label}) {name_display:<36} {rank_str:<12} {child_info:>10}")
+                
+                # Build name display with vernacular name in column
+                name_display = child.name[:30] if len(child.name) > 30 else child.name
+                if child.vernacular_names:
+                    vn = child.vernacular_names[0][:22]
+                    vn_display = f'"{vn}"'
+                else:
+                    vn_display = ""
+                
+                print(f"  {complete_marker} ({label}) {name_display:<30} {vn_display:<24} {rank_str:<12} {child_info:>12}")
 
             print()
 
@@ -182,9 +189,9 @@ class TreeExplorer:
                 nav_str = "  ".join(nav_hints)
                 print(f"  Page {self.page + 1}/{total_pages}   {nav_str}")
 
-        print("-" * 70)
+        print("-" * 100)
         print("  [a-z] select | [<] back | [/] search | [S] sort | [F] filter | [Q] quit")
-        print("=" * 70)
+        print("=" * 100)
 
     def search(self, query: str) -> None:
         """Search for a taxon by name."""
@@ -297,6 +304,10 @@ def main() -> None:
     print("Loading GBIF Backbone taxonomy... (this may take a few minutes)")
     backbone = GBIFBackbone(backbone_path)
     tree = GBIFTaxonomyTree.from_backbone(backbone, accepted_only=True)
+
+    print("\n  Loading vernacular names...")
+    vn_count = tree.add_vernacular_names(backbone)
+    print(f"    Added {vn_count:,} vernacular names")
 
     print("\nTree loaded! Starting explorer...\n")
     input("Press Enter to begin...")
