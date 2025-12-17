@@ -39,6 +39,20 @@ from taxonomica.redaction import (
     build_redaction_terms_manual,
 )
 
+# UI components
+from taxonomica.ui import (
+    NodeListDisplay,
+    SortMode,
+    clear_screen,
+    display_node_list,
+    format_rank,
+    get_sorted_children,
+    get_user_choice,
+    index_to_label,
+    label_to_index,
+    wrap_text,
+)
+
 __all__ = [
     # Wikipedia DwC-A
     "DarwinCoreArchive",
@@ -66,5 +80,16 @@ __all__ = [
     "RedactionTerms",
     "build_redaction_terms_from_node",
     "build_redaction_terms_manual",
+    # UI
+    "NodeListDisplay",
+    "SortMode",
+    "clear_screen",
+    "display_node_list",
+    "format_rank",
+    "get_sorted_children",
+    "get_user_choice",
+    "index_to_label",
+    "label_to_index",
+    "wrap_text",
 ]
 

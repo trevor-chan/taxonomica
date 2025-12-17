@@ -68,6 +68,29 @@ class WikipediaSpecies:
     def get_all_text(self) -> str:
         """Get all description text concatenated."""
         return "\n\n".join(desc.clean_text() for desc in self.descriptions)
+    
+    def get_useful_text(self) -> str:
+        """Get description text useful for gameplay (excludes species lists, galleries, etc.).
+        
+        Returns:
+            Concatenated text from useful sections, or empty string if none.
+        """
+        # Sections that are just lists of names or not useful for guessing
+        exclude_sections = {
+            "species", "subspecies", "genera", "gallery", "references",
+            "see also", "external links", "notes", "bibliography",
+            "further reading", "subgenera", "varieties", "cultivars",
+        }
+        
+        useful = []
+        for desc in self.descriptions:
+            section_lower = desc.section_type.lower()
+            if section_lower not in exclude_sections:
+                text = desc.clean_text()
+                if text:
+                    useful.append(text)
+        
+        return "\n\n".join(useful)
 
 
 class WikipediaData:
