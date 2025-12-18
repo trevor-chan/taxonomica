@@ -24,6 +24,7 @@ from taxonomica.gbif_backbone import GBIFBackbone
 from taxonomica.gbif_tree import GBIFTaxonomyTree, TaxonomyNode
 from taxonomica.wikipedia import WikipediaData
 from taxonomica.redaction import Redactor, build_redaction_terms_from_node
+from taxonomica.popularity import PopularityIndex
 from taxonomica.ui import (
     clear_screen,
     wrap_text,
@@ -112,6 +113,10 @@ class TaxonomicaGame:
     DEFAULT_REVEAL_MODE = "lines"  # "lines" or "sentences"
     DEFAULT_END_AT_GENUS = True  # End game at genus (skip species guessing)
     
+    # Guess cap settings
+    MAX_GUESSES_PER_LEVEL = 5  # Max wrong guesses before auto-advance
+    GUESS_CAP_PENALTY = 3  # Score penalty when guess cap is reached
+    
     def __init__(
         self,
         tree: GBIFTaxonomyTree,
@@ -122,12 +127,14 @@ class TaxonomicaGame:
         chunks_per_guess: int = DEFAULT_CHUNKS_PER_GUESS,
         reveal_mode: str = DEFAULT_REVEAL_MODE,
         end_at_genus: bool = DEFAULT_END_AT_GENUS,
+        difficulty: str | None = None,
     ):
         self.tree = tree
         self.wiki = wiki
         self.target = target_species
         self.description = description
         self.end_at_genus = end_at_genus
+        self.difficulty = difficulty or "random"
         
         # Determine which ranks to play through
         if end_at_genus:
@@ -162,6 +169,7 @@ class TaxonomicaGame:
         self.score = 0  # Wrong guesses (lower is better)
         self.guesses = 0  # Total guesses made
         self.revealed_ranks: set[str] = set()
+        self.level_wrong_guesses = 0  # Wrong guesses at current level
         
         # Build redaction
         self.terms = build_redaction_terms_from_node(target_species)
@@ -218,16 +226,38 @@ class TaxonomicaGame:
         
         if choice == correct_child:
             # Correct! Reveal this rank and advance
-            self.revealed_ranks.add(self.get_current_rank())
-            self.redactor.reveal_rank(self.get_current_rank())
-            self.current_node = choice
-            self.current_rank_index += 1
-            self.display_config.page = 0  # Reset page for new level
+            self._advance_to_next_level(choice)
             return True
         else:
-            # Wrong! Increment score
+            # Wrong! Increment score and level counter
             self.score += 1
+            self.level_wrong_guesses += 1
             return False
+    
+    def _advance_to_next_level(self, node: TaxonomyNode) -> None:
+        """Advance to the next level after correct guess or guess cap."""
+        self.revealed_ranks.add(self.get_current_rank())
+        self.redactor.reveal_rank(self.get_current_rank())
+        self.current_node = node
+        self.current_rank_index += 1
+        self.display_config.page = 0  # Reset page for new level
+        self.level_wrong_guesses = 0  # Reset level counter
+    
+    def apply_guess_cap_penalty(self) -> TaxonomyNode:
+        """Apply penalty and auto-advance when guess cap is reached.
+        
+        Returns:
+            The correct node that we're advancing to.
+        """
+        self.score += self.GUESS_CAP_PENALTY
+        correct_child = self.get_correct_child()
+        if correct_child:
+            self._advance_to_next_level(correct_child)
+        return correct_child
+    
+    def is_at_guess_cap(self) -> bool:
+        """Check if player has reached the guess cap for this level."""
+        return self.level_wrong_guesses >= self.MAX_GUESSES_PER_LEVEL
     
     def is_complete(self) -> bool:
         """Check if the game is complete."""
@@ -252,7 +282,8 @@ class TaxonomicaGame:
         
         # Header
         print("=" * 100)
-        print("  🌿 TAXONOMICA - Guess the Species! 🌿")
+        difficulty_label = f"[{self.difficulty.upper()}]" if self.difficulty != "random" else ""
+        print(f"  🌿 TAXONOMICA - Guess the Species! {difficulty_label} 🌿")
         print("=" * 100)
         
         # Score and progress
@@ -284,9 +315,9 @@ class TaxonomicaGame:
                 print(f"  {line}")
         else:
             print(wrap_text(redacted, width=94))
+        # Show ellipsis if more content available
         if self.visible_chunks < total_chunks:
-            remaining = total_chunks - self.visible_chunks
-            print(f"\n  ... {remaining} more {self.chunk_name}(s) will be revealed with each guess ...")
+            print("  ...")
         print("-" * 100)
         
         # Current guessing level
@@ -295,7 +326,8 @@ class TaxonomicaGame:
         
         if current_rank != "complete":
             sort_name = SORT_MODE_NAMES[self.display_config.sort_mode]
-            print(f"\n  Choose the correct {current_rank.upper()}:  (sorted: {sort_name})")
+            guesses_left = self.MAX_GUESSES_PER_LEVEL - self.level_wrong_guesses
+            print(f"\n  Choose the correct {current_rank.upper()}:  ({guesses_left} guesses left, sorted: {sort_name})")
             
             choices = self.get_choices()
             
@@ -411,9 +443,20 @@ class TaxonomicaGame:
                         print(f"    Common name: {selected.vernacular_names[0]}")
                     input("  Press Enter to continue...")
                 else:
-                    print(f"\n  ✗ Wrong! That's not the right {self.get_current_rank()}.{reveal_msg}")
-                    print(f"    (The correct answer is still among the choices)")
-                    input("  Press Enter to try again...")
+                    # Check if guess cap reached
+                    if self.is_at_guess_cap():
+                        correct_node = self.apply_guess_cap_penalty()
+                        print(f"\n  ✗ Out of guesses for this level!{reveal_msg}")
+                        print(f"    The answer was: {correct_node.name}")
+                        if correct_node.vernacular_names:
+                            print(f"    Common name: {correct_node.vernacular_names[0]}")
+                        print(f"    (+{self.GUESS_CAP_PENALTY} penalty, advancing to next level)")
+                        input("  Press Enter to continue...")
+                    else:
+                        guesses_remaining = self.MAX_GUESSES_PER_LEVEL - self.level_wrong_guesses
+                        print(f"\n  ✗ Wrong!{reveal_msg} ({guesses_remaining} guesses left)")
+                        print(f"    (The correct answer is still among the choices)")
+                        input("  Press Enter to try again...")
         
         # Victory!
         self.display_victory()
@@ -423,19 +466,47 @@ class TaxonomicaGame:
 def find_species_with_wikipedia(
     tree: GBIFTaxonomyTree,
     wiki: WikipediaData,
+    popularity_index: PopularityIndex | None = None,
+    difficulty: str | None = None,
     max_attempts: int = 200,
 ) -> tuple[TaxonomyNode, str] | None:
     """Find a random species that has a Wikipedia entry with description.
     
-    Returns (node, description) or None if not found.
+    Args:
+        tree: The GBIF taxonomy tree.
+        wiki: The Wikipedia data loader.
+        popularity_index: Optional popularity index for difficulty filtering.
+        difficulty: Optional difficulty tier ("easy", "medium", "hard", "expert").
+                   If None, any difficulty is accepted.
+        max_attempts: Maximum number of species to try.
+    
+    Returns:
+        Tuple of (node, description) or None if not found.
     """
-    # Get all species nodes with complete paths
+    # Pre-filter: Build list of candidate species names from popularity index
+    # This is MUCH faster than random sampling when filtering by difficulty
+    candidate_names: set[str] | None = None
+    if difficulty and popularity_index:
+        print(f"  Pre-filtering for difficulty: {difficulty.upper()}...")
+        candidate_names = set()
+        for metrics in popularity_index.iter_by_difficulty(difficulty, min_sections=2):
+            candidate_names.add(metrics.scientific_name.lower())
+        print(f"    Found {len(candidate_names):,} candidates in popularity index")
+    
+    # Get species nodes, optionally filtered by difficulty candidates
     species_nodes = []
     for node in tree._nodes_by_id.values():
         if node.rank == "species" and node.has_complete_path():
+            # If filtering by difficulty, only include candidates
+            if candidate_names is not None:
+                if node.name.lower() not in candidate_names:
+                    continue
             species_nodes.append(node)
     
-    print(f"  Found {len(species_nodes):,} species with complete paths")
+    print(f"  Found {len(species_nodes):,} eligible species")
+    
+    if not species_nodes:
+        return None
     
     # Try random species until we find one with a Wikipedia entry
     attempts = 0
@@ -449,7 +520,7 @@ def find_species_with_wikipedia(
         attempts += 1
         
         # Progress indicator
-        if attempts % 20 == 0:
+        if attempts % 50 == 0:
             print(f"    Searching... ({attempts} attempts)")
         
         # Try to find Wikipedia entry
@@ -465,6 +536,40 @@ def find_species_with_wikipedia(
                     return node, full_text
     
     return None
+
+
+def select_difficulty() -> str | None:
+    """Prompt user to select difficulty level.
+    
+    Returns:
+        Difficulty tier string or None for any difficulty.
+    """
+    print("\n" + "=" * 60)
+    print("  SELECT DIFFICULTY")
+    print("=" * 60)
+    print()
+    print("  (1) EASY   - Well-known species (Lion, Cat, Rose...)")
+    print("  (2) MEDIUM - Moderately known species")
+    print("  (3) HARD   - Obscure species with less documentation")
+    print("  (4) RANDOM - Any species (mixed difficulty)")
+    print()
+    
+    while True:
+        try:
+            choice = input("  Enter choice (1-4): ").strip()
+        except (KeyboardInterrupt, EOFError):
+            return None
+        
+        if choice == "1":
+            return "easy"
+        elif choice == "2":
+            return "medium"
+        elif choice == "3":
+            return "hard"
+        elif choice == "4":
+            return None
+        else:
+            print("  Invalid choice. Please enter 1, 2, 3, or 4.")
 
 
 def main():
@@ -498,10 +603,22 @@ def main():
     print("\n  Loading Wikipedia data...")
     wiki = WikipediaData(wiki_path)
     
+    print("\n  Building popularity index...")
+    popularity_index = PopularityIndex.from_wikipedia_dwca(wiki_path)
+    stats = popularity_index.get_stats()
+    print(f"    Easy: {stats['easy']:,} | Medium: {stats['medium']:,} | Hard: {stats['hard']:,}")
+    
     # Game loop - allow replaying
     while True:
-        print("\n  Finding a mystery species...")
-        result = find_species_with_wikipedia(tree, wiki)
+        # Select difficulty
+        difficulty = select_difficulty()
+        if difficulty is None:
+            difficulty_display = "RANDOM"
+        else:
+            difficulty_display = difficulty.upper()
+        
+        print(f"\n  Finding a mystery species (difficulty: {difficulty_display})...")
+        result = find_species_with_wikipedia(tree, wiki, popularity_index, difficulty)
         
         if not result:
             print("  ERROR: Could not find a species with Wikipedia entry.")
@@ -511,7 +628,7 @@ def main():
         target_node, description = result
         
         # Create and run game
-        game = TaxonomicaGame(tree, wiki, target_node, description)
+        game = TaxonomicaGame(tree, wiki, target_node, description, difficulty=difficulty)
         
         print("\n  Ready to play!")
         input("  Press Enter to start...")

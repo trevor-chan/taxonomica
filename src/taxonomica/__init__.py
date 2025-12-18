@@ -39,6 +39,12 @@ from taxonomica.redaction import (
     build_redaction_terms_manual,
 )
 
+# Popularity scoring for difficulty levels
+from taxonomica.popularity import (
+    PopularityIndex,
+    PopularityMetrics,
+)
+
 # UI components
 from taxonomica.ui import (
     NodeListDisplay,
@@ -91,5 +97,8 @@ __all__ = [
     "index_to_label",
     "label_to_index",
     "wrap_text",
+    # Popularity
+    "PopularityIndex",
+    "PopularityMetrics",
 ]
 
