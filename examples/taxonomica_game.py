@@ -111,7 +111,7 @@ class TaxonomicaGame:
     DEFAULT_INITIAL_CHUNKS = 3  # Lines or sentences to show initially
     DEFAULT_CHUNKS_PER_GUESS = 1  # Additional chunks per guess
     DEFAULT_REVEAL_MODE = "lines"  # "lines" or "sentences"
-    DEFAULT_END_AT_GENUS = True  # End game at genus (skip species guessing)
+    DEFAULT_END_AT_GENUS = False  # Go all the way to species level
     
     # Guess cap settings
     MAX_GUESSES_PER_LEVEL = 5  # Max wrong guesses before auto-advance
@@ -467,7 +467,7 @@ def find_species_with_wikipedia(
     tree: GBIFTaxonomyTree,
     wiki: WikipediaData,
     popularity_index: PopularityIndex | None = None,
-    difficulty: str | None = None,
+    difficulty: str = "expert",
     max_attempts: int = 200,
 ) -> tuple[TaxonomyNode, str] | None:
     """Find a random species that has a Wikipedia entry with description.
@@ -476,21 +476,32 @@ def find_species_with_wikipedia(
         tree: The GBIF taxonomy tree.
         wiki: The Wikipedia data loader.
         popularity_index: Optional popularity index for difficulty filtering.
-        difficulty: Optional difficulty tier ("easy", "medium", "hard", "expert").
-                   If None, any difficulty is accepted.
+        difficulty: Difficulty tier ("easy", "medium", "hard", "expert").
+                   Tiers are inclusive: medium includes easy, hard includes medium, etc.
         max_attempts: Maximum number of species to try.
     
     Returns:
         Tuple of (node, description) or None if not found.
     """
+    # Difficulty thresholds (inclusive - each tier includes easier tiers)
+    DIFFICULTY_THRESHOLDS = {
+        "easy": 55,    # Top 1%
+        "medium": 49,  # Top 5%
+        "hard": 24,    # Top 25%
+        "expert": 0,   # All species
+    }
+    
+    min_score = DIFFICULTY_THRESHOLDS.get(difficulty, 0)
+    
     # Pre-filter: Build list of candidate species names from popularity index
     # This is MUCH faster than random sampling when filtering by difficulty
     candidate_names: set[str] | None = None
-    if difficulty and popularity_index:
-        print(f"  Pre-filtering for difficulty: {difficulty.upper()}...")
+    if difficulty != "expert" and popularity_index and min_score > 0:
+        print(f"  Pre-filtering for difficulty: {difficulty.upper()} (score >= {min_score})...")
         candidate_names = set()
-        for metrics in popularity_index.iter_by_difficulty(difficulty, min_sections=2):
-            candidate_names.add(metrics.scientific_name.lower())
+        for metrics in popularity_index._by_id.values():
+            if metrics.popularity_score >= min_score and metrics.section_count >= 2:
+                candidate_names.add(metrics.scientific_name.lower())
         print(f"    Found {len(candidate_names):,} candidates in popularity index")
     
     # Get species nodes, optionally filtered by difficulty candidates
@@ -538,27 +549,27 @@ def find_species_with_wikipedia(
     return None
 
 
-def select_difficulty() -> str | None:
+def select_difficulty() -> str:
     """Prompt user to select difficulty level.
     
     Returns:
-        Difficulty tier string or None for any difficulty.
+        Difficulty tier string ("easy", "medium", "hard", or "expert").
     """
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 40)
     print("  SELECT DIFFICULTY")
-    print("=" * 60)
+    print("=" * 40)
     print()
-    print("  (1) EASY   - Well-known species (Lion, Cat, Rose...)")
-    print("  (2) MEDIUM - Moderately known species")
-    print("  (3) HARD   - Obscure species with less documentation")
-    print("  (4) RANDOM - Any species (mixed difficulty)")
+    print("  (1) EASY")
+    print("  (2) MEDIUM")
+    print("  (3) HARD")
+    print("  (4) EXPERT")
     print()
     
     while True:
         try:
             choice = input("  Enter choice (1-4): ").strip()
         except (KeyboardInterrupt, EOFError):
-            return None
+            return "expert"
         
         if choice == "1":
             return "easy"
@@ -567,7 +578,7 @@ def select_difficulty() -> str | None:
         elif choice == "3":
             return "hard"
         elif choice == "4":
-            return None
+            return "expert"
         else:
             print("  Invalid choice. Please enter 1, 2, 3, or 4.")
 
@@ -612,12 +623,8 @@ def main():
     while True:
         # Select difficulty
         difficulty = select_difficulty()
-        if difficulty is None:
-            difficulty_display = "RANDOM"
-        else:
-            difficulty_display = difficulty.upper()
         
-        print(f"\n  Finding a mystery species (difficulty: {difficulty_display})...")
+        print(f"\n  Finding a mystery species (difficulty: {difficulty.upper()})...")
         result = find_species_with_wikipedia(tree, wiki, popularity_index, difficulty)
         
         if not result:

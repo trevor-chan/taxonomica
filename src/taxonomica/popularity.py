@@ -49,28 +49,34 @@ class PopularityMetrics:
         The score is a weighted combination of metrics, designed so that
         well-known species like "Lion" or "Oak" score high, while obscure
         species with minimal coverage score low.
+        
+        Component weights:
+        - Description length: 0-20 points (log scale)
+        - Section count: 0-10 points
+        - Vernacular name: 0-25 points (binary)
+        - Multimedia: 0-30 points
         """
         score = 0.0
         
-        # Description length (0-40 points)
-        # Scale: 100 chars = 1 pt, 1000 chars = 10 pts, 10000+ chars = 40 pts
+        # Description length (0-20 points) - reduced from 40
+        # Scale: 100 chars = ~1.3 pt, 1000 chars = ~6.5 pts, 10000+ chars = 20 pts
         if self.description_length > 0:
             import math
-            desc_score = min(40, math.log10(self.description_length) * 13)
+            desc_score = min(20, math.log10(self.description_length) * 6.5)
             score += desc_score
         
-        # Section count (0-20 points)
-        # 1 section = 2 pts, 5 sections = 10 pts, 10+ sections = 20 pts
-        score += min(20, self.section_count * 2)
+        # Section count (0-10 points) - reduced from 20
+        # 1 section = 1 pt, 5 sections = 5 pts, 10+ sections = 10 pts
+        score += min(10, self.section_count * 1)
         
         # Vernacular name (0-25 points)
         # Having a common name is a strong indicator of recognition
         if self.has_vernacular:
             score += 25
         
-        # Multimedia (0-15 points)
-        # 1 image = 3 pts, 5+ images = 15 pts
-        score += min(15, self.multimedia_count * 3)
+        # Multimedia (0-30 points) - doubled from 15
+        # 1 image = 6 pts, 5+ images = 30 pts
+        score += min(30, self.multimedia_count * 6)
         
         return min(100, score)
     
@@ -78,15 +84,21 @@ class PopularityMetrics:
     def difficulty_tier(self) -> str:
         """Get difficulty tier based on popularity score.
         
+        Tiers are inclusive (easier tiers are subsets of harder tiers):
+        - Easy: Top 1% (score >= 55)
+        - Medium: Top 5% (score >= 49)
+        - Hard: Top 25% (score >= 24)
+        - Expert: All species
+        
         Returns:
             "easy", "medium", "hard", or "expert"
         """
         score = self.popularity_score
-        if score >= 60:
+        if score >= 55:
             return "easy"
-        elif score >= 40:
+        elif score >= 49:
             return "medium"
-        elif score >= 20:
+        elif score >= 24:
             return "hard"
         else:
             return "expert"
