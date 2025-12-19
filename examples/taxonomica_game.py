@@ -14,6 +14,7 @@ Controls:
     Q           Quit game (uppercase)
 """
 
+import json
 import random
 import sys
 from pathlib import Path
@@ -101,6 +102,87 @@ def split_into_lines(text: str, line_width: int = 90) -> list[str]:
     return lines
 
 
+def load_rank_titles() -> dict:
+    """Load rank titles from JSON file."""
+    titles_path = Path(__file__).parent / "rank_titles.json"
+    if titles_path.exists():
+        with open(titles_path) as f:
+            return json.load(f)
+    return {}
+
+
+def get_rank_title(score: int, target: TaxonomyNode) -> str | None:
+    """Get a rank title based on score and the target species' taxonomy.
+    
+    Args:
+        score: The player's final score (lower is better).
+        target: The target species node.
+        
+    Returns:
+        A randomly selected title appropriate for the score and taxon,
+        or None if no titles are available.
+    """
+    titles_data = load_rank_titles()
+    if not titles_data or "tiers" not in titles_data:
+        return None
+    
+    tiers = titles_data["tiers"]
+    
+    # Determine which tier based on score
+    if score == 0:
+        tier = tiers.get("perfect", {})
+    elif score <= 7:
+        tier = tiers.get("excellent", {})
+    elif score <= 14:
+        tier = tiers.get("good", {})
+    else:
+        tier = tiers.get("needs_improvement", {})
+    
+    if not tier:
+        return None
+    
+    # Build a list of candidate titles, prioritizing more specific matches
+    candidates = []
+    
+    # Extract taxonomy info from the target's path
+    taxonomy = {}
+    node = target
+    while node and node.parent:
+        if node.rank:
+            taxonomy[node.rank] = node.name
+        node = node.parent
+    
+    # Check for order-specific titles (most specific)
+    order_name = taxonomy.get("order")
+    if order_name and "by_order" in tier:
+        order_titles = tier["by_order"].get(order_name, [])
+        if order_titles:
+            candidates.extend(order_titles)
+    
+    # Check for class-specific titles
+    class_name = taxonomy.get("class")
+    if class_name and "by_class" in tier:
+        class_titles = tier["by_class"].get(class_name, [])
+        if class_titles:
+            candidates.extend(class_titles)
+    
+    # Check for kingdom-specific titles
+    kingdom_name = taxonomy.get("kingdom")
+    if kingdom_name and "by_kingdom" in tier:
+        kingdom_titles = tier["by_kingdom"].get(kingdom_name, [])
+        if kingdom_titles:
+            candidates.extend(kingdom_titles)
+    
+    # Fall back to generic titles if no specific ones found
+    if not candidates:
+        candidates = tier.get("generic", [])
+    
+    if candidates:
+        return random.choice(candidates)
+    
+    return None
+
+
 class TaxonomicaGame:
     """The main game class."""
     
@@ -166,7 +248,9 @@ class TaxonomicaGame:
         self.current_rank_index = 0
         
         # Game state
-        self.score = 0  # Wrong guesses (lower is better)
+        self.score = 0  # Total score (lower is better)
+        self.wrong_guesses = 0  # Number of wrong guesses
+        self.penalty_points = 0  # Penalty points from guess cap
         self.guesses = 0  # Total guesses made
         self.revealed_ranks: set[str] = set()
         self.level_wrong_guesses = 0  # Wrong guesses at current level
@@ -231,6 +315,7 @@ class TaxonomicaGame:
         else:
             # Wrong! Increment score and level counter
             self.score += 1
+            self.wrong_guesses += 1
             self.level_wrong_guesses += 1
             return False
     
@@ -250,6 +335,7 @@ class TaxonomicaGame:
             The correct node that we're advancing to.
         """
         self.score += self.GUESS_CAP_PENALTY
+        self.penalty_points += self.GUESS_CAP_PENALTY
         correct_child = self.get_correct_child()
         if correct_child:
             self._advance_to_next_level(correct_child)
@@ -340,7 +426,7 @@ class TaxonomicaGame:
             
             # Command bar
             print("-" * 100)
-            print("  [a-z] select | [N]ext page | [P]rev page | [S] sort | [Q] quit")
+            print("  [a-z] select | [I+letter] info | [N]ext/[P]rev page | [S] sort | [Q] quit")
             print("=" * 100)
         
         return choices
@@ -357,15 +443,24 @@ class TaxonomicaGame:
         print("=" * 100)
         
         # Final score
-        print(f"\n  Final Score: {self.score} wrong guesses out of {self.guesses} total guesses")
+        # Show detailed score breakdown
+        if self.penalty_points > 0:
+            print(f"\n  Final Score: {self.score} ({self.wrong_guesses} wrong + {self.penalty_points} penalty) out of {self.guesses} guesses")
+        else:
+            print(f"\n  Final Score: {self.score} wrong guesses out of {self.guesses} total guesses")
         if self.score == 0:
-            print("  🏆 PERFECT GAME! 🏆")
-        elif self.score <= 3:
-            print("  ⭐ Excellent taxonomy knowledge!")
+            print("  🏆 PERFECT GAME!")
         elif self.score <= 7:
+            print("  ⭐ Excellent taxonomy knowledge!")
+        elif self.score <= 14:
             print("  👍 Good job!")
         else:
             print("  📚 Keep studying taxonomy!")
+        
+        # Get a fun rank title based on score and taxon
+        rank_title = get_rank_title(self.score, self.target)
+        if rank_title:
+            print(f"\n  🎖️  You've attained the rank of: {rank_title}")
         
         # Reveal the species
         print(f"\n  The species was: {self.target.name}")
@@ -392,6 +487,78 @@ class TaxonomicaGame:
             print(f"\n  ... and {len(self.description) - 2000:,} more characters ...")
         print("-" * 100)
     
+    def _handle_input(self, choice: str, choices: list[TaxonomyNode]) -> tuple[str, TaxonomyNode | None]:
+        """Handle user input and return (action, selected_node)."""
+        from taxonomica.ui import label_to_index
+        
+        if not choice:
+            return ("invalid", None)
+        
+        # Quit
+        if choice == 'Q':
+            return ("quit", None)
+        
+        # Pagination
+        if choice == 'N':
+            if self.display_config.next_page(len(choices)):
+                return ("refresh", None)
+            return ("invalid", None)
+        
+        if choice == 'P':
+            if self.display_config.prev_page():
+                return ("refresh", None)
+            return ("invalid", None)
+        
+        # Sort
+        if choice == 'S':
+            self.display_config.cycle_sort()
+            return ("refresh", None)
+        
+        # Selection (a-z)
+        choice_lower = choice.lower()
+        if len(choice_lower) == 1:
+            page_idx = label_to_index(choice_lower)
+            if 0 <= page_idx < 26:
+                absolute_idx = self.display_config.page * self.display_config.page_size + page_idx
+                if 0 <= absolute_idx < len(choices):
+                    return ("select", choices[absolute_idx])
+        
+        return ("invalid", None)
+    
+    def show_taxon_info(self, node: TaxonomyNode) -> None:
+        """Display Wikipedia information about a taxon."""
+        clear_screen()
+        
+        print("=" * 100)
+        print(f"  📖 INFORMATION: {node.name}")
+        print("=" * 100)
+        
+        if node.vernacular_names:
+            print(f"\n  Common name: {node.vernacular_names[0]}")
+        print(f"  Rank: {node.rank}")
+        print(f"  Descendants: {node.count_descendants():,}")
+        
+        # Try to get Wikipedia description
+        wiki_entry = self.wiki.match_gbif_taxon(node.name)
+        if wiki_entry:
+            description = wiki_entry.get_useful_text() or wiki_entry.get_abstract()
+            if description:
+                print("\n" + "-" * 100)
+                print("  WIKIPEDIA DESCRIPTION:")
+                print("-" * 100)
+                # Show more text for info view
+                print(wrap_text(description[:3000], width=94))
+                if len(description) > 3000:
+                    print(f"\n  ... and {len(description) - 3000:,} more characters ...")
+                print("-" * 100)
+            else:
+                print("\n  (No description available)")
+        else:
+            print("\n  (No Wikipedia entry found for this taxon)")
+        
+        print("\n" + "=" * 100)
+        input("  Press Enter to return to the game...")
+    
     def run(self) -> None:
         """Run the game loop."""
         while not self.is_complete():
@@ -401,15 +568,30 @@ class TaxonomicaGame:
                 print("\n  No valid choices available!")
                 break
             
-            # Get player input using shared function
-            action, selected = get_user_choice(
-                choices,
-                self.display_config,
-                prompt="\n  Your choice: ",
-                allow_navigation=True,
-                allow_sort=True,
-                allow_filter=False,  # No filter toggle in game
-            )
+            # Get player input
+            try:
+                choice_input = input("\n  Your choice: ").strip()
+            except (KeyboardInterrupt, EOFError):
+                print(f"\n  Game ended. The species was: {self.target.name}")
+                return
+            
+            # Check for info command (I + letter)
+            if len(choice_input) == 2 and choice_input[0].upper() == 'I':
+                letter = choice_input[1].lower()
+                if 'a' <= letter <= 'z':
+                    idx = ord(letter) - ord('a')
+                    absolute_idx = self.display_config.page * self.display_config.page_size + idx
+                    if 0 <= absolute_idx < len(choices):
+                        self.show_taxon_info(choices[absolute_idx])
+                        continue
+                    else:
+                        print("  Invalid choice.")
+                        input("  Press Enter to continue...")
+                        continue
+            
+            # Handle standard commands using shared function
+            # We need to simulate the input since we already read it
+            action, selected = self._handle_input(choice_input, choices)
             
             if action == "quit":
                 print(f"\n  Game ended. The species was: {self.target.name}")
@@ -497,12 +679,10 @@ def find_species_with_wikipedia(
     # This is MUCH faster than random sampling when filtering by difficulty
     candidate_names: set[str] | None = None
     if difficulty != "expert" and popularity_index and min_score > 0:
-        print(f"  Pre-filtering for difficulty: {difficulty.upper()} (score >= {min_score})...")
         candidate_names = set()
         for metrics in popularity_index._by_id.values():
             if metrics.popularity_score >= min_score and metrics.section_count >= 2:
                 candidate_names.add(metrics.scientific_name.lower())
-        print(f"    Found {len(candidate_names):,} candidates in popularity index")
     
     # Get species nodes, optionally filtered by difficulty candidates
     species_nodes = []
@@ -530,9 +710,9 @@ def find_species_with_wikipedia(
         tried.add(node.id)
         attempts += 1
         
-        # Progress indicator
-        if attempts % 50 == 0:
-            print(f"    Searching... ({attempts} attempts)")
+        # Progress indicator (only show if taking a while)
+        if attempts % 100 == 0:
+            print(f"    Searching...")
         
         # Try to find Wikipedia entry
         wiki_species = wiki.match_gbif_taxon(node.name)
@@ -543,7 +723,6 @@ def find_species_with_wikipedia(
                 # Check we have enough lines for progressive reveal
                 lines = split_into_lines(full_text)
                 if len(lines) >= 12:  # Need enough lines for many guesses
-                    print(f"  Found a species after {attempts} attempts!")
                     return node, full_text
     
     return None
@@ -624,7 +803,7 @@ def main():
         # Select difficulty
         difficulty = select_difficulty()
         
-        print(f"\n  Finding a mystery species (difficulty: {difficulty.upper()})...")
+        print(f"\n  Loading...")
         result = find_species_with_wikipedia(tree, wiki, popularity_index, difficulty)
         
         if not result:

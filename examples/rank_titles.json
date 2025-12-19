@@ -1,0 +1,191 @@
+{
+  "tiers": {
+    "perfect": {
+      "description": "Score of 0",
+      "generic": [
+        "Charles Darwin",
+        "Carl Linnaeus",
+        "E.O. Wilson",
+        "Jane Goodall",
+        "David Attenborough",
+        "Alexander von Humboldt",
+        "Rachel Carson",
+        "Alfred Russel Wallace"
+      ],
+      "by_kingdom": {
+        "Animalia": [
+          "Charles Darwin",
+          "Jane Goodall",
+          "David Attenborough",
+          "E.O. Wilson",
+          "Dian Fossey",
+          "Jacques Cousteau",
+          "Gerald Durrell"
+        ],
+        "Plantae": [
+          "Carl Linnaeus",
+          "Gregor Mendel",
+          "Joseph Banks",
+          "Asa Gray",
+          "Luther Burbank"
+        ],
+        "Fungi": [
+          "Paul Stamets",
+          "Beatrix Potter",
+          "Alexander Fleming"
+        ]
+      },
+      "by_class": {
+        "Mammalia": ["Jane Goodall", "Dian Fossey", "George Schaller"],
+        "Aves": ["John James Audubon", "Roger Tory Peterson", "David Sibley"],
+        "Reptilia": ["Steve Irwin", "Raymond Ditmars", "Romulus Whitaker"],
+        "Amphibia": ["Marvalee Wake", "David Wake"],
+        "Actinopterygii": ["Jacques Cousteau", "Eugenie Clark", "Sylvia Earle"],
+        "Insecta": ["E.O. Wilson", "Jean-Henri Fabre", "Maria Sibylla Merian"],
+        "Arachnida": ["Maria Sibylla Merian", "Norman Platnick"]
+      }
+    },
+    "excellent": {
+      "description": "Score 1-7",
+      "generic": [
+        "Master Naturalist",
+        "Senior Field Researcher",
+        "Museum Curator",
+        "University Professor",
+        "Biodiversity Expert",
+        "Conservation Biologist",
+        "Wildlife Documentarian"
+      ],
+      "by_kingdom": {
+        "Animalia": [
+          "Master Zoologist",
+          "Senior Wildlife Biologist",
+          "Animal Behavior Expert",
+          "Conservation Zoologist"
+        ],
+        "Plantae": [
+          "Master Botanist",
+          "Senior Plant Taxonomist",
+          "Herbarium Curator",
+          "Ethnobotanist"
+        ],
+        "Fungi": [
+          "Master Mycologist",
+          "Fungal Taxonomist",
+          "Truffle Hunter Extraordinaire"
+        ]
+      },
+      "by_class": {
+        "Mammalia": ["Master Mammalogist", "Wildlife Tracker", "Primate Researcher"],
+        "Aves": ["Master Ornithologist", "Birding Guide", "Avian Researcher"],
+        "Reptilia": ["Master Herpetologist", "Reptile Curator", "Snake Handler"],
+        "Amphibia": ["Master Herpetologist", "Frog Conservationist"],
+        "Actinopterygii": ["Master Ichthyologist", "Marine Biologist", "Reef Expert"],
+        "Insecta": ["Master Entomologist", "Butterfly Curator", "Apiarist"],
+        "Arachnida": ["Master Arachnologist", "Spider Expert"],
+        "Gastropoda": ["Master Malacologist", "Shell Collector"],
+        "Anthozoa": ["Coral Reef Scientist", "Marine Invertebrate Expert"]
+      },
+      "by_order": {
+        "Lepidoptera": ["Lepidopterist", "Butterfly Specialist"],
+        "Coleoptera": ["Coleopterist", "Beetle Expert"],
+        "Hymenoptera": ["Hymenopterist", "Bee Researcher"],
+        "Carnivora": ["Carnivore Specialist", "Big Cat Expert"],
+        "Primates": ["Primatologist", "Great Ape Researcher"],
+        "Cetacea": ["Cetologist", "Whale Researcher"],
+        "Passeriformes": ["Songbird Specialist", "Passerine Expert"],
+        "Squamata": ["Squamate Expert", "Lizard Specialist"]
+      }
+    },
+    "good": {
+      "description": "Score 8-14",
+      "generic": [
+        "Field Naturalist",
+        "Nature Guide",
+        "Wildlife Photographer",
+        "National Park Ranger",
+        "Zookeeper",
+        "Biology Teacher",
+        "Nature Center Educator"
+      ],
+      "by_kingdom": {
+        "Animalia": [
+          "Field Zoologist",
+          "Wildlife Photographer",
+          "Safari Guide",
+          "Zoo Educator"
+        ],
+        "Plantae": [
+          "Field Botanist",
+          "Garden Curator",
+          "Nature Photographer",
+          "Arborist"
+        ],
+        "Fungi": [
+          "Mushroom Forager",
+          "Mycology Enthusiast",
+          "Fungal Photographer"
+        ]
+      },
+      "by_class": {
+        "Mammalia": ["Mammal Tracker", "Wildlife Safari Guide", "Zoo Naturalist"],
+        "Aves": ["Birdwatching Guide", "Audubon Society Member", "Bird Bander"],
+        "Reptilia": ["Reptile Keeper", "Herp Society Member"],
+        "Amphibia": ["Frog Watcher", "Vernal Pool Surveyor"],
+        "Actinopterygii": ["Aquarium Curator", "Fish Keeper", "Snorkeling Guide"],
+        "Insecta": ["Bug Collector", "Butterfly Watcher", "Beekeeper"]
+      }
+    },
+    "needs_improvement": {
+      "description": "Score 15+",
+      "generic": [
+        "Amateur Naturalist",
+        "Nature Enthusiast",
+        "Weekend Hiker",
+        "Backyard Birdwatcher",
+        "Pet Owner",
+        "Zoo Visitor",
+        "Weekend Zoo Goer",
+        "Nature Documentary Fan",
+        "EPA Auditor"
+      ],
+      "by_kingdom": {
+        "Animalia": [
+          "Dog Walker",
+          "Cat Owner",
+          "Goldfish Keeper",
+          "Guinea Pig Parent",
+          "Hamster Handler",
+          "Casual Zoo Visitor"
+        ],
+        "Plantae": [
+          "Houseplant Owner",
+          "Lawn Mower",
+          "Grocery Shopper",
+          "Accidental Gardener",
+          "Salad Eater"
+        ],
+        "Fungi": [
+          "Pizza Topping Enjoyer",
+          "Mushroom Soup Fan",
+          "Cheese Appreciator"
+        ]
+      },
+      "by_class": {
+        "Mammalia": ["Dog Walker", "Cat Wrangler", "Hamster Wheel Watcher", "Zoo Gift Shop Browser"],
+        "Aves": ["Pigeon Feeder", "Seagull Dodger", "Duck Pond Regular", "Chicken Nugget Connoisseur"],
+        "Reptilia": ["Pet Store Visitor", "Crocodile Avoider", "Lizard Looker"],
+        "Amphibia": ["Puddle Stepper", "Frog Listener", "Toad Tolerator"],
+        "Actinopterygii": ["Goldfish Owner", "Sushi Consumer", "Aquarium Window Watcher"],
+        "Insecta": ["Bug Swatter", "Fly Dodger", "Mosquito Magnet", "Ant Stomper"]
+      },
+      "by_order": {
+        "Artiodactyla": ["Cow Tipper", "Pig Farmer", "Goat Yoga Participant"],
+        "Galliformes": ["Chicken Keeper", "Egg Collector", "Turkey Pardoner"],
+        "Carnivora": ["Cat Video Watcher", "Dog Park Regular"],
+        "Rodentia": ["Squirrel Feeder", "Mouse Trap Setter"]
+      }
+    }
+  }
+}
+
