@@ -123,62 +123,55 @@ def get_rank_title(score: int, target: TaxonomyNode) -> str | None:
         or None if no titles are available.
     """
     titles_data = load_rank_titles()
-    if not titles_data or "tiers" not in titles_data:
+    if not titles_data or "titles" not in titles_data:
         return None
-    
-    tiers = titles_data["tiers"]
     
     # Determine which tier based on score
     if score == 0:
-        tier = tiers.get("perfect", {})
+        tier_name = "perfect"
     elif score <= 7:
-        tier = tiers.get("excellent", {})
+        tier_name = "excellent"
     elif score <= 14:
-        tier = tiers.get("good", {})
+        tier_name = "good"
     else:
-        tier = tiers.get("needs_improvement", {})
-    
-    if not tier:
-        return None
-    
-    # Build a list of candidate titles, prioritizing more specific matches
-    candidates = []
+        tier_name = "needs_improvement"
     
     # Extract taxonomy info from the target's path
-    taxonomy = {}
+    # Collect all taxon names in the hierarchy (kingdom, phylum, class, order, family, genus)
+    player_taxa = {"generic"}  # Always include generic
     node = target
     while node and node.parent:
-        if node.rank:
-            taxonomy[node.rank] = node.name
+        if node.name:
+            player_taxa.add(node.name)
         node = node.parent
     
-    # Check for order-specific titles (most specific)
-    order_name = taxonomy.get("order")
-    if order_name and "by_order" in tier:
-        order_titles = tier["by_order"].get(order_name, [])
-        if order_titles:
-            candidates.extend(order_titles)
+    # Find all matching titles
+    # Prioritize titles that match more specific taxa
+    specific_matches = []
+    generic_matches = []
     
-    # Check for class-specific titles
-    class_name = taxonomy.get("class")
-    if class_name and "by_class" in tier:
-        class_titles = tier["by_class"].get(class_name, [])
-        if class_titles:
-            candidates.extend(class_titles)
+    for title, info in titles_data["titles"].items():
+        # Check if this title applies to the current tier
+        if tier_name not in info.get("tiers", []):
+            continue
+        
+        # Check taxa match
+        title_taxa = set(info.get("taxa", []))
+        matching_taxa = title_taxa & player_taxa
+        
+        if matching_taxa:
+            # Check if it's a generic-only match or has specific taxa
+            if matching_taxa == {"generic"}:
+                generic_matches.append(title)
+            else:
+                # Has at least one specific taxon match
+                specific_matches.append(title)
     
-    # Check for kingdom-specific titles
-    kingdom_name = taxonomy.get("kingdom")
-    if kingdom_name and "by_kingdom" in tier:
-        kingdom_titles = tier["by_kingdom"].get(kingdom_name, [])
-        if kingdom_titles:
-            candidates.extend(kingdom_titles)
-    
-    # Fall back to generic titles if no specific ones found
-    if not candidates:
-        candidates = tier.get("generic", [])
-    
-    if candidates:
-        return random.choice(candidates)
+    # Prefer specific matches over generic ones
+    if specific_matches:
+        return random.choice(specific_matches)
+    elif generic_matches:
+        return random.choice(generic_matches)
     
     return None
 
@@ -577,6 +570,13 @@ class TaxonomicaGame:
             
             # Check for info command (I + letter)
             if len(choice_input) == 2 and choice_input[0].upper() == 'I':
+                # Block info at species level (would reveal the answer)
+                current_rank = self.game_ranks[self.current_rank_index]
+                if current_rank == "species":
+                    print("  Info not available at species level.")
+                    input("  Press Enter to continue...")
+                    continue
+                
                 letter = choice_input[1].lower()
                 if 'a' <= letter <= 'z':
                     idx = ord(letter) - ord('a')
