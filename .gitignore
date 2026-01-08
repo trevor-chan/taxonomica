@@ -53,6 +53,9 @@ wikipedia-en-dwca/
 backbone/
 *.txt
 !requirements.txt
+*.gz
+*.db
+*.csv
 
 # OS
 .DS_Store
