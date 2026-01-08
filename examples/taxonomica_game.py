@@ -14,6 +14,7 @@ Controls:
     Q           Quit game (uppercase)
 """
 
+import hashlib
 import json
 import random
 import sys
@@ -203,6 +204,8 @@ class TaxonomicaGame:
         reveal_mode: str = DEFAULT_REVEAL_MODE,
         end_at_genus: bool = DEFAULT_END_AT_GENUS,
         difficulty: str | None = None,
+        seed_string: str | None = None,
+        round_number: int | None = None,
     ):
         self.tree = tree
         self.wiki = wiki
@@ -210,6 +213,8 @@ class TaxonomicaGame:
         self.description = description
         self.end_at_genus = end_at_genus
         self.difficulty = difficulty or "random"
+        self.seed_string = seed_string  # For competitive play
+        self.round_number = round_number  # Round number for seeded games
         
         # Determine which ranks to play through
         if end_at_genus:
@@ -283,12 +288,19 @@ class TaxonomicaGame:
         
         # Use the shared sorting function, but filter to target rank
         self.display_config.filter_rank = target_rank
-        return get_sorted_children(
+        choices = get_sorted_children(
             self.current_node,
             sort_mode=self.display_config.sort_mode,
             filter_complete_paths=True,
             filter_rank=target_rank,
         )
+        
+        # For non-species levels, exclude leaf nodes (they can never be correct)
+        # since the target is always a species with a complete path
+        if target_rank != "species":
+            choices = [c for c in choices if c.children]
+        
+        return choices
     
     def make_guess(self, choice: TaxonomyNode) -> bool:
         """Make a guess. Returns True if correct."""
@@ -362,7 +374,13 @@ class TaxonomicaGame:
         # Header
         print("=" * 100)
         difficulty_label = f"[{self.difficulty.upper()}]" if self.difficulty != "random" else ""
-        print(f"  🌿 TAXONOMICA - Guess the Species! {difficulty_label} 🌿")
+        if self.seed_string and self.round_number:
+            seed_label = f" | Seed: \"{self.seed_string}\" Round {self.round_number}"
+        elif self.seed_string:
+            seed_label = f" | Seed: \"{self.seed_string}\""
+        else:
+            seed_label = ""
+        print(f"  🌿 TAXONOMICA - Guess the Species! {difficulty_label}{seed_label} 🌿")
         print("=" * 100)
         
         # Score and progress
@@ -419,7 +437,7 @@ class TaxonomicaGame:
             
             # Command bar
             print("-" * 100)
-            print("  [a-z] select | [I+letter] info | [N]ext/[P]rev page | [S] sort | [Q] quit")
+            print("  [a-z] select | [I] or [I+letter] info | [N]ext/[P]rev page | [S] sort | [Q] quit")
             print("=" * 100)
         
         return choices
@@ -454,6 +472,11 @@ class TaxonomicaGame:
         rank_title = get_rank_title(self.score, self.target)
         if rank_title:
             print(f"\n  🎖️  You've attained the rank of: {rank_title}")
+        
+        # Show seed for competitive play comparison
+        if self.seed_string:
+            round_info = f" | Round {self.round_number}" if self.round_number else ""
+            print(f"\n  🎮 Seed: \"{self.seed_string}\"{round_info} | Difficulty: {self.difficulty.upper()}")
         
         # Reveal the species
         print(f"\n  The species was: {self.target.name}")
@@ -568,12 +591,17 @@ class TaxonomicaGame:
                 print(f"\n  Game ended. The species was: {self.target.name}")
                 return
             
-            # Check for info command (I + letter)
+            # Check for info command: [I] for current node, [I+letter] for choice
+            if choice_input.upper() == 'I':
+                # Show info about the current node (where we are now)
+                self.show_taxon_info(self.current_node)
+                continue
+            
             if len(choice_input) == 2 and choice_input[0].upper() == 'I':
-                # Block info at species level (would reveal the answer)
+                # Block info on choices at species level (would reveal the answer)
                 current_rank = self.game_ranks[self.current_rank_index]
                 if current_rank == "species":
-                    print("  Info not available at species level.")
+                    print("  Info not available for species choices.")
                     input("  Press Enter to continue...")
                     continue
                 
@@ -650,6 +678,7 @@ def find_species_with_wikipedia(
     wiki: WikipediaData,
     popularity_index: PopularityIndex | None = None,
     difficulty: str = "expert",
+    seed: int | None = None,
     max_attempts: int = 200,
 ) -> tuple[TaxonomyNode, str] | None:
     """Find a random species that has a Wikipedia entry with description.
@@ -660,6 +689,8 @@ def find_species_with_wikipedia(
         popularity_index: Optional popularity index for difficulty filtering.
         difficulty: Difficulty tier ("easy", "medium", "hard", "expert").
                    Tiers are inclusive: medium includes easy, hard includes medium, etc.
+        seed: Optional integer seed for deterministic species selection.
+              If provided, the same seed + difficulty will always select the same species.
         max_attempts: Maximum number of species to try.
     
     Returns:
@@ -699,15 +730,22 @@ def find_species_with_wikipedia(
     if not species_nodes:
         return None
     
-    # Try random species until we find one with a Wikipedia entry
-    attempts = 0
-    tried = set()
+    # Sort by ID for deterministic ordering (important for seeded selection)
+    species_nodes.sort(key=lambda n: n.id)
     
-    while attempts < max_attempts and len(tried) < len(species_nodes):
-        node = random.choice(species_nodes)
-        if node.id in tried:
-            continue
-        tried.add(node.id)
+    # Create a random generator (seeded if provided)
+    if seed is not None:
+        rng = random.Random(seed)
+    else:
+        rng = random.Random()
+    
+    # Shuffle the list deterministically
+    rng.shuffle(species_nodes)
+    
+    # Try species in order until we find one with a Wikipedia entry
+    attempts = 0
+    
+    for node in species_nodes[:max_attempts]:
         attempts += 1
         
         # Progress indicator (only show if taking a while)
@@ -726,6 +764,48 @@ def find_species_with_wikipedia(
                     return node, full_text
     
     return None
+
+
+def get_seed_from_string(seed_string: str) -> int:
+    """Convert a seed string to an integer seed for random.
+    
+    Args:
+        seed_string: Any string to use as seed.
+        
+    Returns:
+        Integer seed derived from the string.
+    """
+    # Use SHA256 hash and take first 8 bytes as integer
+    hash_bytes = hashlib.sha256(seed_string.encode()).digest()
+    return int.from_bytes(hash_bytes[:8], byteorder='big')
+
+
+def prompt_for_seed() -> tuple[str | None, int | None]:
+    """Prompt user for optional seed for competitive play.
+    
+    Returns:
+        Tuple of (seed_string, seed_int) or (None, None) if no seed provided.
+    """
+    print("\n" + "=" * 60)
+    print("  🎮 GAME SETUP")
+    print("=" * 60)
+    print()
+    print("  For competitive play, enter a seed word/phrase.")
+    print("  Players with the same seed + difficulty get the same species!")
+    print()
+    print("  Leave blank for a random species.")
+    print()
+    
+    try:
+        seed_input = input("  Seed (or press Enter to skip): ").strip()
+    except (KeyboardInterrupt, EOFError):
+        return None, None
+    
+    if seed_input:
+        seed_int = get_seed_from_string(seed_input)
+        return seed_input, seed_int
+    
+    return None, None
 
 
 def select_difficulty() -> str:
@@ -798,13 +878,32 @@ def main():
     stats = popularity_index.get_stats()
     print(f"    Easy: {stats['easy']:,} | Medium: {stats['medium']:,} | Hard: {stats['hard']:,}")
     
+    # Prompt for optional seed once at the start (for competitive play)
+    seed_string, base_seed = prompt_for_seed()
+    
+    if seed_string:
+        print(f"\n  Using seed: \"{seed_string}\"")
+    
+    # Select difficulty once at the start
+    difficulty = select_difficulty()
+    
+    # Track rounds and cumulative score for seeded play
+    round_number = 1
+    cumulative_score = 0
+    round_scores: list[tuple[int, str]] = []  # (score, species_name) for each round
+    
     # Game loop - allow replaying
     while True:
-        # Select difficulty
-        difficulty = select_difficulty()
+        # For seeded games, combine base seed with round number
+        if base_seed is not None:
+            # Combine seed with round for deterministic but different species each round
+            round_seed = base_seed + round_number
+            print(f"\n  Round {round_number} - Loading...")
+        else:
+            round_seed = None
+            print(f"\n  Loading...")
         
-        print(f"\n  Loading...")
-        result = find_species_with_wikipedia(tree, wiki, popularity_index, difficulty)
+        result = find_species_with_wikipedia(tree, wiki, popularity_index, difficulty, seed=round_seed)
         
         if not result:
             print("  ERROR: Could not find a species with Wikipedia entry.")
@@ -814,12 +913,27 @@ def main():
         target_node, description = result
         
         # Create and run game
-        game = TaxonomicaGame(tree, wiki, target_node, description, difficulty=difficulty)
+        game = TaxonomicaGame(
+            tree, wiki, target_node, description,
+            difficulty=difficulty,
+            seed_string=seed_string,
+            round_number=round_number if seed_string else None,
+        )
         
         print("\n  Ready to play!")
         input("  Press Enter to start...")
         
         game.run()
+        
+        # Track cumulative score for seeded games
+        if seed_string:
+            round_scores.append((game.score, target_node.name))
+            cumulative_score += game.score
+            
+            # Show cumulative score summary
+            print("\n" + "-" * 60)
+            print(f"  📊 CUMULATIVE SCORE after {round_number} round(s): {cumulative_score}")
+            print("-" * 60)
         
         # Play again?
         print("\n" + "=" * 100)
@@ -829,8 +943,25 @@ def main():
             again = 'n'
         
         if again != 'y':
+            # Show final summary for seeded games
+            if seed_string and len(round_scores) > 1:
+                print("\n" + "=" * 60)
+                print(f"  🏆 FINAL SESSION SUMMARY")
+                print(f"     Seed: \"{seed_string}\" | Difficulty: {difficulty.upper()}")
+                print("=" * 60)
+                for i, (score, species) in enumerate(round_scores, 1):
+                    print(f"  Round {i}: {score:3d} pts - {species}")
+                print("-" * 60)
+                print(f"  TOTAL: {cumulative_score} points across {len(round_scores)} rounds")
+                avg = cumulative_score / len(round_scores)
+                print(f"  AVERAGE: {avg:.1f} points per round")
+                print("=" * 60)
+            
             print("\n  Thanks for playing Taxonomica! 🌿\n")
             break
+        
+        # Increment round for next game
+        round_number += 1
 
 
 if __name__ == "__main__":

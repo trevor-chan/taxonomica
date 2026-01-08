@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Taxonomica - Guess the Species!</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div id="app">
+        <!-- Setup Screen -->
+        <div id="setup-screen" class="screen">
+            <div class="container">
+                <h1>🌿 TAXONOMICA 🌿</h1>
+                <p class="subtitle">Guess the Species!</p>
+                
+                <div class="setup-form">
+                    <div class="form-group">
+                        <label>Seed (optional, for competitive play):</label>
+                        <input type="text" id="seed-input" placeholder="Enter a seed word...">
+                        <p class="hint">Same seed + difficulty = same species</p>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Difficulty:</label>
+                        <div class="difficulty-buttons">
+                            <button class="difficulty-btn" data-difficulty="easy">EASY</button>
+                            <button class="difficulty-btn selected" data-difficulty="medium">MEDIUM</button>
+                            <button class="difficulty-btn" data-difficulty="hard">HARD</button>
+                            <button class="difficulty-btn" data-difficulty="expert">EXPERT</button>
+                        </div>
+                    </div>
+                    
+                    <button id="start-btn" class="primary-btn">Start Game</button>
+                </div>
+                
+                <div class="keyboard-hint">
+                    <p>Keyboard: <kbd>1</kbd>-<kbd>4</kbd> for difficulty, <kbd>Enter</kbd> to start</p>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Loading Screen -->
+        <div id="loading-screen" class="screen hidden">
+            <div class="container">
+                <h2>Loading...</h2>
+                <p class="loading-text">Finding a mystery species...</p>
+            </div>
+        </div>
+        
+        <!-- Game Screen -->
+        <div id="game-screen" class="screen hidden">
+            <div class="container">
+                <header class="game-header">
+                    <h1>🌿 TAXONOMICA <span id="difficulty-label"></span> <span id="seed-label"></span></h1>
+                    <div class="stats">
+                        <span>Score: <strong id="score">0</strong></span>
+                        <span>Progress: <strong id="progress">0/7</strong></span>
+                    </div>
+                </header>
+                
+                <div id="revealed-path" class="path"></div>
+                
+                <div class="description-box">
+                    <div class="description-header">
+                        <span>MYSTERY SPECIES DESCRIPTION</span>
+                        <span id="lines-info">(showing 3/42 lines)</span>
+                    </div>
+                    <div id="description" class="description-text"></div>
+                </div>
+                
+                <div id="feedback" class="feedback hidden"></div>
+                
+                <div class="choices-section">
+                    <h3 id="rank-prompt">Choose the correct KINGDOM: (5 guesses left)</h3>
+                    <div class="choices-container">
+                        <div id="choices" class="choices-grid"></div>
+                    </div>
+                    <div id="pagination" class="pagination hidden">
+                        <span id="page-info">Page 1 of 1</span>
+                    </div>
+                </div>
+                
+                <div class="input-bar">
+                    <input type="text" id="command-input" placeholder="Enter command (a-z, I, Ia, N, P, S, Q)..." autocomplete="off">
+                    <button id="submit-btn">Enter</button>
+                </div>
+                
+                <div class="controls">
+                    <span><kbd>a</kbd>-<kbd>z</kbd> select</span>
+                    <span><kbd>I</kbd> info (current)</span>
+                    <span><kbd>I</kbd>+letter info (choice)</span>
+                    <span><kbd>N</kbd>/<kbd>P</kbd> next/prev page</span>
+                    <span><kbd>S</kbd> sort</span>
+                    <span><kbd>Q</kbd> quit</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Victory Screen -->
+        <div id="victory-screen" class="screen hidden">
+            <div class="container">
+                <h1>🎉 CONGRATULATIONS! 🎉</h1>
+                <p class="victory-text">You identified the species!</p>
+                
+                <div id="final-score" class="final-score"></div>
+                
+                <div id="species-reveal" class="species-reveal"></div>
+                
+                <div id="full-path" class="full-path"></div>
+                
+                <div id="session-summary" class="session-summary hidden"></div>
+                
+                <div class="victory-buttons">
+                    <button id="play-again-btn" class="primary-btn">Play Again (Y)</button>
+                    <button id="new-game-btn" class="secondary-btn">New Game (N)</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Info Modal -->
+        <div id="info-modal" class="modal hidden">
+            <div class="modal-content">
+                <button class="modal-close">&times;</button>
+                <h2 id="info-title"></h2>
+                <div id="info-body"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='game.js') }}"></script>
+</body>
+</html>

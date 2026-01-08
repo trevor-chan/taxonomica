@@ -498,6 +498,10 @@
       "tiers": ["good"],
       "taxa": ["Insecta", "Hymenoptera"]
     },
+    "Crocodile Wrangler": {
+      "tiers": ["good"],
+      "taxa": ["Reptilia", "Crocodilia"]
+    },
 
 
     "Amateur Naturalist": {
@@ -576,7 +580,7 @@
       "tiers": ["needs_improvement"],
       "taxa": ["Plantae"]
     },
-    "Accidental Gardener": {
+    "Weekend Weeder": {
       "tiers": ["needs_improvement"],
       "taxa": ["Plantae"]
     },
@@ -584,15 +588,11 @@
       "tiers": ["needs_improvement"],
       "taxa": ["Plantae"]
     },
-    "Pizza Topping Enjoyer": {
-      "tiers": ["needs_improvement"],
-      "taxa": ["Fungi"]
-    },
     "Mushroom Soup Fan": {
       "tiers": ["needs_improvement"],
       "taxa": ["Fungi"]
     },
-    "Cheese Appreciator": {
+    "Fermenting Enthusiast": {
       "tiers": ["needs_improvement"],
       "taxa": ["Fungi"]
     },
@@ -620,10 +620,6 @@
       "tiers": ["needs_improvement"],
       "taxa": ["Reptilia"]
     },
-    "Crocodile Avoider": {
-      "tiers": ["needs_improvement"],
-      "taxa": ["Reptilia"]
-    },
     "Lizard Looker": {
       "tiers": ["needs_improvement"],
       "taxa": ["Reptilia", "Squamata"]
@@ -636,17 +632,13 @@
       "tiers": ["needs_improvement"],
       "taxa": ["Amphibia"]
     },
-    "Toad Tolerator": {
-      "tiers": ["needs_improvement"],
-      "taxa": ["Amphibia"]
-    },
     "Sushi Consumer": {
       "tiers": ["needs_improvement"],
       "taxa": ["Actinopterygii"]
     },
     "Aquarium Window Watcher": {
       "tiers": ["needs_improvement"],
-      "taxa": ["Actinopterygii"]
+      "taxa": ["Osteichthyes", "Actinopterygii"]
     },
     "Bug Swatter": {
       "tiers": ["needs_improvement"],
