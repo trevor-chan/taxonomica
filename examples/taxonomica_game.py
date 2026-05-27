@@ -592,12 +592,13 @@ class TaxonomicaGame:
                 return
             
             # Check for info command: [I] for current node, [I+letter] for choice
-            if choice_input.upper() == 'I':
+            # Note: Only uppercase 'I' triggers info; lowercase 'i' selects taxon at index 8
+            if choice_input == 'I':
                 # Show info about the current node (where we are now)
                 self.show_taxon_info(self.current_node)
                 continue
             
-            if len(choice_input) == 2 and choice_input[0].upper() == 'I':
+            if len(choice_input) == 2 and choice_input[0] == 'I':
                 # Block info on choices at species level (would reveal the answer)
                 current_rank = self.game_ranks[self.current_rank_index]
                 if current_rank == "species":
