@@ -6,6 +6,12 @@ Explore the tree of life.
 
 Taxonomica is an interactive game where you identify a mystery species by navigating through the taxonomic tree of life. Starting from a redacted Wikipedia description, you work your way through Kingdom → Phylum → Class → Order → Family → Genus → Species to discover the hidden organism.
 
+## Repository Layout
+
+The main game now lives in the installable package under `src/taxonomica/game/`, with `play.py` as the source-checkout launcher. Exploratory scripts remain in `examples/`, data-building scripts live in `utilities/`, and the Flask interface in `web/` is currently experimental rather than the main development path.
+
+See [docs/repository_layout.md](docs/repository_layout.md) for the working directory map and development conventions.
+
 ## Gameplay
 
 When a game begins:
@@ -21,7 +27,7 @@ When a game begins:
 ### Prerequisites
 
 You'll need:
-- **Python 3.10 or newer** — [Download Python](https://www.python.org/downloads/)
+- **Python 3.11 or newer** — [Download Python](https://www.python.org/downloads/)
 - **About 2GB of disk space** for the taxonomy datasets
 
 ### Step 1: Download the Code
@@ -67,6 +73,7 @@ Taxonomica requires two datasets to run:
 Your folder structure should look like:
 ```
 taxonomica/
+├── play.py
 ├── backbone/
 │   ├── Taxon.tsv
 │   ├── VernacularName.tsv
@@ -85,6 +92,7 @@ taxonomica/
 Your folder structure should now include:
 ```
 taxonomica/
+├── play.py
 ├── backbone/
 ├── wikipedia-en-dwca/
 │   ├── taxon.txt
@@ -100,8 +108,10 @@ taxonomica/
 Once everything is installed, start the game:
 
 ```bash
-python examples/taxonomica_game.py
+python play.py
 ```
+
+If you installed the package in editable mode, you can also run `taxonomica` or `python -m taxonomica.game` from the repository root. The older `python examples/taxonomica_game.py` command still works as a compatibility launcher.
 
 
 ### Controls
@@ -188,6 +198,6 @@ MIT
 ## Contributing
 
 Contributions welcome! Feel free to:
-- Add new rank titles to `examples/rank_titles.json`
+- Add new rank titles to `src/taxonomica/game/resources/rank_titles.json`
 - Report bugs or suggest features via GitHub Issues
 - Submit pull requests for improvements

@@ -7,8 +7,6 @@ Run with:
 Then visit http://localhost:8080
 """
 
-import hashlib
-import json
 import random
 import sys
 from dataclasses import dataclass, field
@@ -20,11 +18,14 @@ from flask import Flask, render_template, request, jsonify, session
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from taxonomica.game.selection import get_seed_from_string
+from taxonomica.game.text import split_into_lines
+from taxonomica.game.titles import get_rank_title
 from taxonomica.gbif_backbone import GBIFBackbone
 from taxonomica.gbif_tree import GBIFTaxonomyTree, TaxonomyNode
-from taxonomica.wikipedia import WikipediaData
-from taxonomica.redaction import Redactor, build_redaction_terms_from_node
 from taxonomica.popularity import PopularityIndex
+from taxonomica.redaction import Redactor, build_redaction_terms_from_node
+from taxonomica.wikipedia import WikipediaData
 
 app = Flask(__name__)
 app.secret_key = 'taxonomica-secret-key-change-in-production'
@@ -50,104 +51,6 @@ DIFFICULTY_THRESHOLDS = {
 
 # Game ranks
 ALL_RANKS = ["kingdom", "phylum", "class", "order", "family", "genus", "species"]
-
-# Rank titles data
-rank_titles_data: dict | None = None
-
-
-def load_rank_titles() -> dict:
-    """Load rank titles from JSON file."""
-    global rank_titles_data
-    if rank_titles_data is not None:
-        return rank_titles_data
-    
-    titles_path = Path(__file__).parent.parent / "examples" / "rank_titles.json"
-    if titles_path.exists():
-        with open(titles_path) as f:
-            rank_titles_data = json.load(f)
-            return rank_titles_data
-    return {}
-
-
-def get_rank_title(score: int, target_node: TaxonomyNode) -> str | None:
-    """Get a rank title based on score and the target species' taxonomy."""
-    titles_data = load_rank_titles()
-    if not titles_data or "titles" not in titles_data:
-        return None
-    
-    # Determine tier based on score
-    if score == 0:
-        tier_name = "perfect"
-    elif score <= 7:
-        tier_name = "excellent"
-    elif score <= 14:
-        tier_name = "good"
-    else:
-        tier_name = "needs_improvement"
-    
-    # Extract taxonomy info from the target's path
-    player_taxa = {"generic"}
-    node = target_node
-    while node and node.parent:
-        if node.name:
-            player_taxa.add(node.name)
-        node = node.parent
-    
-    # Find matching titles
-    specific_matches = []
-    generic_matches = []
-    
-    for title, info in titles_data["titles"].items():
-        if tier_name not in info.get("tiers", []):
-            continue
-        
-        title_taxa = set(info.get("taxa", []))
-        matching_taxa = title_taxa & player_taxa
-        
-        if matching_taxa:
-            if matching_taxa == {"generic"}:
-                generic_matches.append(title)
-            else:
-                specific_matches.append(title)
-    
-    # Prefer specific matches over generic
-    if specific_matches:
-        return random.choice(specific_matches)
-    elif generic_matches:
-        return random.choice(generic_matches)
-    
-    return None
-
-
-def get_seed_from_string(seed_string: str) -> int:
-    """Convert a seed string to an integer seed."""
-    hash_bytes = hashlib.sha256(seed_string.encode()).digest()
-    return int.from_bytes(hash_bytes[:8], byteorder='big')
-
-
-def split_into_lines(text: str, line_width: int = 90) -> list[str]:
-    """Split text into wrapped lines."""
-    words = text.split()
-    lines = []
-    current_line = []
-    current_length = 0
-    
-    for word in words:
-        word_len = len(word)
-        if current_length + word_len + (1 if current_line else 0) > line_width:
-            if current_line:
-                lines.append(" ".join(current_line))
-            current_line = [word]
-            current_length = word_len
-        else:
-            current_line.append(word)
-            current_length += word_len + (1 if len(current_line) > 1 else 0)
-    
-    if current_line:
-        lines.append(" ".join(current_line))
-    
-    return lines
-
 
 def find_species_with_wikipedia(
     difficulty: str = "expert",
@@ -339,7 +242,9 @@ def start_game():
         'game_id': game_id,  # Reference to server-side cached description
         'target_id': target_node.id,
         'target_name': target_node.name,
-        'target_vernacular': target_node.vernacular_names[0] if target_node.vernacular_names else None,
+        'target_vernacular': (
+            target_node.vernacular_names[0] if target_node.vernacular_names else None
+        ),
         'correct_path': correct_path,
         # 'description_lines' moved to server-side cache
         'total_lines': len(lines),
@@ -501,7 +406,9 @@ def make_guess():
             game['revealed_path'].append({
                 'name': correct_node.name,
                 'rank': correct_node.rank,
-                'vernacular': correct_node.vernacular_names[0] if correct_node.vernacular_names else None,
+                'vernacular': (
+                    correct_node.vernacular_names[0] if correct_node.vernacular_names else None
+                ),
             })
             
             # Check if complete
@@ -509,7 +416,11 @@ def make_guess():
                 session['game'] = game
                 # Get rank title
                 target_node_for_title = tree._nodes_by_id.get(game['target_id'])
-                rank_title = get_rank_title(game['score'], target_node_for_title) if target_node_for_title else None
+                rank_title = (
+                    get_rank_title(game['score'], target_node_for_title)
+                    if target_node_for_title
+                    else None
+                )
                 
                 return jsonify({
                     'correct': False,
@@ -517,7 +428,11 @@ def make_guess():
                     'complete': True,
                     'correct_answer': {
                         'name': correct_node.name,
-                        'vernacular': correct_node.vernacular_names[0] if correct_node.vernacular_names else None,
+                        'vernacular': (
+                            correct_node.vernacular_names[0]
+                            if correct_node.vernacular_names
+                            else None
+                        ),
                     },
                     'target_name': game['target_name'],
                     'target_vernacular': game['target_vernacular'],
@@ -542,7 +457,11 @@ def make_guess():
                 'complete': False,
                 'correct_answer': {
                     'name': correct_node.name,
-                    'vernacular': correct_node.vernacular_names[0] if correct_node.vernacular_names else None,
+                    'vernacular': (
+                        correct_node.vernacular_names[0]
+                        if correct_node.vernacular_names
+                        else None
+                    ),
                 },
                 'current_rank': next_rank,
                 'choices': choices,
@@ -638,4 +557,3 @@ if __name__ == '__main__':
     print("=" * 50 + "\n")
     
     app.run(debug=True, port=8080, host='127.0.0.1')
-

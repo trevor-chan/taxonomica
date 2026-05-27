@@ -45,6 +45,16 @@ from taxonomica.popularity import (
     PopularityMetrics,
 )
 
+# Playable command-line game
+from taxonomica.game import (
+    TaxonomicaGame,
+    find_species_with_wikipedia,
+    get_rank_title,
+    get_seed_from_string,
+    split_into_lines,
+    split_into_sentences,
+)
+
 # UI components
 from taxonomica.ui import (
     NodeListDisplay,
@@ -100,5 +110,11 @@ __all__ = [
     # Popularity
     "PopularityIndex",
     "PopularityMetrics",
+    # Game
+    "TaxonomicaGame",
+    "find_species_with_wikipedia",
+    "get_rank_title",
+    "get_seed_from_string",
+    "split_into_lines",
+    "split_into_sentences",
 ]
-
