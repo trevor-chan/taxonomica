@@ -204,6 +204,9 @@ how many species have complete `kingdom -> phylum -> class -> order -> family ->
 genus -> species` paths. The current candidate tree is article-URL backed, but
 does not yet include extracted Wikipedia prose descriptions.
 
+Data-source and rebuild notes are tracked in
+[docs/data_assembly.md](docs/data_assembly.md).
+
 ## Troubleshooting
 
 ### "ModuleNotFoundError: No module named 'taxonomica'"

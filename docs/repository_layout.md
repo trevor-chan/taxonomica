@@ -26,6 +26,10 @@ This repo is organized around the terminal game and the taxonomy data loaders it
 - `examples/explore_coldp_sqlite.py` browses a ColDP SQLite index lazily.
 - After `pip install -e .`, `taxonomica` and `python -m taxonomica.game` also launch the game from the current working directory.
 - `utilities/` contains data-building and analysis utilities, especially scripts that fetch or process external datasets.
+- `utilities/export_wikipedia_targets.py` exports candidate English Wikipedia page titles for dump extraction.
+- `utilities/extract_wikipedia_descriptions.py` spot-checks description extraction from English Wikipedia XML dumps.
+- `utilities/spot_check_wikipedia_matching.py` audits random species and parent-taxon Wikipedia matching.
+- `utilities/build_wikipedia_description_db.py` assembles the final candidate description SQLite database.
 - `web/` contains the experimental Flask interface. It is not the main development focus right now, but it should keep importing shared game helpers where practical.
 
 ## Data Directories
@@ -34,6 +38,8 @@ This repo is organized around the terminal game and the taxonomy data loaders it
 - `wikipedia-en-dwca/` should contain the extracted Wikipedia DwC-A files.
 - `data/coldp/` can contain downloaded ColDP ZIP archives such as `wikidata.zip` and `wikispecies.zip`.
 - `data/candidate_trees/` contains generated SQLite candidate trees for coverage audits.
+- `data/wikipedia_targets/` contains generated page-title target lists for Wikipedia dump extraction.
+- `data/assembled/` contains generated final/near-final SQLite data products.
 - `data/` and `utilities/data/` contain generated or downloaded support data for utility scripts.
 
 Large downloaded datasets are expected to live outside the package code and are loaded from the repository root when running `play.py`.

@@ -54,6 +54,7 @@ backbone/
 *.txt
 !requirements.txt
 *.gz
+*.bz2
 *.zip
 *.db
 *.db-*
@@ -63,6 +64,9 @@ backbone/
 *.sqlite3-*
 *.csv
 data/coldp/
+data/candidate_trees/
+data/wikipedia_targets/
+data/assembled/
 
 # OS
 .DS_Store
