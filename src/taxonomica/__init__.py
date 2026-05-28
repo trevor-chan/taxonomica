@@ -24,6 +24,30 @@ from taxonomica.gbif_backbone import (
 from taxonomica.gbif_tree import GBIFTaxonomyTree
 from taxonomica.gbif_tree import TaxonomyNode as GBIFTaxonomyNode
 
+# ColDP parser and tree builder (experimental new data pipeline)
+from taxonomica.candidate_tree import (
+    CandidateMatch,
+    CandidateSpecies,
+    CandidateTreeBuildResult,
+    MajorRankPath,
+    build_candidate_tree,
+    extract_gbif_ids,
+)
+from taxonomica.coldp import (
+    ColdPArchive,
+    ColdPMedia,
+    ColdPNameUsage,
+    ColdPVernacularName,
+)
+from taxonomica.coldp_profile import ColdPProfile, ColdPProfileRecord, profile_archive
+from taxonomica.coldp_sqlite import (
+    ColdPSQLiteStore,
+    ColdPSQLiteTaxon,
+    build_sqlite_index,
+    default_sqlite_path,
+)
+from taxonomica.coldp_tree import ColdPTaxonomyNode, ColdPTaxonomyTree
+
 # Wikipedia description loader
 from taxonomica.wikipedia import (
     WikipediaData,
@@ -87,6 +111,26 @@ __all__ = [
     "GBIFTaxonomyNode",
     "GBIFTaxonomyTree",
     "GBIFVernacularName",
+    # ColDP
+    "ColdPArchive",
+    "ColdPMedia",
+    "ColdPNameUsage",
+    "ColdPProfile",
+    "ColdPProfileRecord",
+    "ColdPSQLiteStore",
+    "ColdPSQLiteTaxon",
+    "ColdPTaxonomyNode",
+    "ColdPTaxonomyTree",
+    "ColdPVernacularName",
+    "CandidateMatch",
+    "CandidateSpecies",
+    "CandidateTreeBuildResult",
+    "MajorRankPath",
+    "build_candidate_tree",
+    "build_sqlite_index",
+    "default_sqlite_path",
+    "extract_gbif_ids",
+    "profile_archive",
     # Wikipedia descriptions
     "WikipediaData",
     "WikipediaDescription",

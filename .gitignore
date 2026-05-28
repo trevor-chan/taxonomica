@@ -54,10 +54,16 @@ backbone/
 *.txt
 !requirements.txt
 *.gz
+*.zip
 *.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
 *.csv
+data/coldp/
 
 # OS
 .DS_Store
 Thumbs.db
-

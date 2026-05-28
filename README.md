@@ -172,6 +172,38 @@ python examples/explore_gbif_tree.py
 
 This opens an interactive explorer where you can navigate through all kingdoms, phyla, classes, and more.
 
+To inspect the newer Catalogue of Life Data Package downloads, place
+`wikidata.zip` and/or `wikispecies.zip` under `data/coldp/` and run:
+
+```bash
+python examples/build_coldp_tree.py wikispecies
+python examples/build_coldp_tree.py wikidata
+```
+
+The default ColDP path is experimental and memory-light: it streams
+`NameUsage.tsv`, reports parent-link health, and does not build a full in-memory
+tree. Use `--mode tree` only for smaller archives or limited tests. See
+[docs/coldp_data.md](docs/coldp_data.md) for the current workflow.
+
+To build a lazy SQLite index for tree exploration:
+
+```bash
+python examples/build_coldp_tree.py wikidata --mode sqlite
+python examples/explore_coldp_sqlite.py wikidata
+```
+
+To assemble the first article-backed, seven-rank candidate gameplay tree from
+Wikidata ColDP plus the GBIF Backbone:
+
+```bash
+python examples/build_candidate_tree.py --force
+```
+
+This writes `data/candidate_trees/wikidata-gbif-candidates.sqlite` and reports
+how many species have complete `kingdom -> phylum -> class -> order -> family ->
+genus -> species` paths. The current candidate tree is article-URL backed, but
+does not yet include extracted Wikipedia prose descriptions.
+
 ## Troubleshooting
 
 ### "ModuleNotFoundError: No module named 'taxonomica'"
@@ -190,6 +222,7 @@ The first run loads millions of taxonomy records. This is normal and takes 1-2 m
 
 - **[GBIF Backbone Taxonomy](https://www.gbif.org/dataset/d7dddbf4-2cf0-4f39-9b2a-bb099caae36c)**: Comprehensive taxonomic classification of all known species
 - **[Wikipedia Species Pages](https://en.wikipedia.org/wiki/Wikipedia:WikiProject_Tree_of_Life)**: Descriptions, common names, and multimedia from Wikipedia
+- **[Catalogue of Life Data Package](https://catalogueoflife.github.io/coldp/)**: Experimental newer taxonomy metadata from Wikidata and Wikispecies
 
 ## License
 
