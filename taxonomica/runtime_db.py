@@ -7,12 +7,8 @@ import shutil
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-from taxonomica.gbif_tree import GBIFTaxonomyTree, TaxonomyNode
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
+from taxonomica.taxonomy import TaxonNode, TaxonomyTree
 
 
 RUNTIME_DB_GLOB = "taxonomica-runtime-*.sqlite"
@@ -27,66 +23,11 @@ class RuntimeDescription:
     scientific_name: str
     title: str
     description: str
-
-    def get_useful_text(self) -> str:
-        """Return the playable description text."""
-        return self.description
-
-    def get_abstract(self) -> str:
-        """Return the best short description available."""
-        return self.description
-
-
-@dataclass(frozen=True)
-class RuntimePopularityMetrics:
-    """Difficulty metrics loaded from the runtime database."""
-
-    taxon_id: str
-    scientific_name: str
+    word_count: int
     description_length: int
-    section_count: int
     multimedia_count: int
     pageview_count: int
     backlink_count: int
-    popularity_score: float
-
-    @property
-    def difficulty_tier(self) -> str:
-        """Get the exclusive difficulty tier for summary counts."""
-        if self.popularity_score >= 55:
-            return "easy"
-        if self.popularity_score >= 49:
-            return "medium"
-        if self.popularity_score >= 24:
-            return "hard"
-        return "expert"
-
-
-class RuntimePopularityIndex:
-    """Popularity lookup compatible with the game selection helper."""
-
-    def __init__(self) -> None:
-        self._by_id: dict[str, RuntimePopularityMetrics] = {}
-        self._by_name: dict[str, str] = {}
-
-    def add(self, metrics: RuntimePopularityMetrics) -> None:
-        """Add one metrics row."""
-        self._by_id[metrics.taxon_id] = metrics
-        self._by_name.setdefault(metrics.scientific_name.lower(), metrics.taxon_id)
-
-    def get_by_name(self, name: str) -> RuntimePopularityMetrics | None:
-        """Get metrics by scientific name."""
-        taxon_id = self._by_name.get(name.lower())
-        if taxon_id is None:
-            return None
-        return self._by_id.get(taxon_id)
-
-    def get_stats(self) -> dict[str, int]:
-        """Get exclusive counts by difficulty tier."""
-        stats = {"easy": 0, "medium": 0, "hard": 0, "expert": 0}
-        for metrics in self._by_id.values():
-            stats[metrics.difficulty_tier] += 1
-        return stats
 
 
 class RuntimeTaxonomyData:
@@ -96,16 +37,19 @@ class RuntimeTaxonomyData:
         self,
         *,
         db_path: Path,
-        tree: GBIFTaxonomyTree,
+        tree: TaxonomyTree,
         descriptions_by_key: dict[str, RuntimeDescription],
         descriptions_by_name: dict[str, RuntimeDescription],
-        popularity_index: RuntimePopularityIndex,
     ) -> None:
         self.db_path = db_path
         self.tree = tree
         self._descriptions_by_key = descriptions_by_key
         self._descriptions_by_name = descriptions_by_name
-        self.popularity_index = popularity_index
+        self.playable_species_nodes = [
+            node
+            for taxon_key in sorted(descriptions_by_key)
+            if (node := tree.find_by_id(taxon_key)) is not None and node.rank == "species"
+        ]
 
     @classmethod
     def from_default(cls, project_root: Path | None = None) -> RuntimeTaxonomyData:
@@ -117,17 +61,21 @@ class RuntimeTaxonomyData:
     def from_sqlite(cls, db_path: str | Path) -> RuntimeTaxonomyData:
         """Load a runtime SQLite database."""
         path = Path(db_path)
-        tree = GBIFTaxonomyTree()
+        tree = TaxonomyTree()
         descriptions_by_key: dict[str, RuntimeDescription] = {}
         descriptions_by_name: dict[str, RuntimeDescription] = {}
-        popularity_index = RuntimePopularityIndex()
 
         with sqlite3.connect(path) as conn:
             conn.row_factory = sqlite3.Row
 
             for row in conn.execute(
                 """
-                SELECT taxon_key, rank, scientific_name, common_name
+                SELECT
+                    taxon_key,
+                    rank,
+                    scientific_name,
+                    common_name,
+                    playable_species_count
                 FROM runtime_taxa
                 ORDER BY length(taxon_key), taxon_key
                 """
@@ -136,12 +84,13 @@ class RuntimeTaxonomyData:
                     continue
                 common_name = row["common_name"]
                 vernacular_names = [common_name] if common_name else []
-                node = TaxonomyNode(
+                node = TaxonNode(
                     id=row["taxon_key"],
                     name=row["scientific_name"],
                     rank=row["rank"],
                     scientific_name=row["scientific_name"],
                     vernacular_names=vernacular_names,
+                    playable_species_count=row["playable_species_count"],
                 )
                 tree._register_node(node)
 
@@ -164,12 +113,11 @@ class RuntimeTaxonomyData:
                     t.scientific_name,
                     d.title,
                     d.description,
+                    d.word_count,
                     d.description_length,
-                    d.section_count,
                     d.multimedia_count,
                     d.pageview_count,
-                    d.backlink_count,
-                    d.difficulty_score
+                    d.backlink_count
                 FROM runtime_descriptions d
                 JOIN runtime_taxa t ON t.taxon_key = d.taxon_key
                 """
@@ -179,33 +127,38 @@ class RuntimeTaxonomyData:
                     scientific_name=row["scientific_name"],
                     title=row["title"],
                     description=row["description"],
+                    word_count=row["word_count"],
+                    description_length=row["description_length"],
+                    multimedia_count=row["multimedia_count"],
+                    pageview_count=row["pageview_count"] or 0,
+                    backlink_count=row["backlink_count"] or 0,
                 )
                 descriptions_by_key[row["taxon_key"]] = description
                 descriptions_by_name.setdefault(row["scientific_name"].lower(), description)
-                popularity_index.add(
-                    RuntimePopularityMetrics(
-                        taxon_id=row["taxon_key"],
-                        scientific_name=row["scientific_name"],
-                        description_length=row["description_length"],
-                        section_count=row["section_count"],
-                        multimedia_count=row["multimedia_count"],
-                        pageview_count=row["pageview_count"] or 0,
-                        backlink_count=row["backlink_count"] or 0,
-                        popularity_score=row["difficulty_score"],
-                    )
-                )
 
+        tree.root.playable_species_count = sum(
+            child.playable_species_count for child in tree.root.children.values()
+        )
         tree.stats["nodes_created"] = len(tree._nodes_by_id) - 1
-        tree.stats["nodes_linked"] = sum(1 for _ in _iter_edges(tree.root))
+        tree.stats["nodes_linked"] = sum(len(node.children) for node in tree._nodes_by_id.values())
+        tree.stats["playable_species"] = sum(
+            1
+            for key in descriptions_by_key
+            if (node := tree.find_by_id(key)) is not None and node.rank == "species"
+        )
         return cls(
             db_path=path,
             tree=tree,
             descriptions_by_key=descriptions_by_key,
             descriptions_by_name=descriptions_by_name,
-            popularity_index=popularity_index,
         )
 
-    def match_gbif_taxon(self, name: str) -> RuntimeDescription | None:
+    @property
+    def playable_species_count(self) -> int:
+        """Return the number of selectable species."""
+        return len(self.playable_species_nodes)
+
+    def match_taxon_name(self, name: str) -> RuntimeDescription | None:
         """Return the description for a scientific name, if available."""
         return self._descriptions_by_name.get(name.lower())
 
@@ -239,9 +192,3 @@ def resolve_runtime_db_path(project_root: Path) -> Path:
             with open(output_path, "wb") as target:
                 shutil.copyfileobj(source, target)
     return output_path
-
-
-def _iter_edges(root: TaxonomyNode) -> Iterator[tuple[TaxonomyNode, TaxonomyNode]]:
-    for child in root.children.values():
-        yield root, child
-        yield from _iter_edges(child)

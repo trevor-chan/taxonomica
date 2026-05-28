@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
-import math
 import shutil
 import sqlite3
 from pathlib import Path
@@ -89,11 +88,15 @@ def build_runtime_db(
         if not force:
             raise FileExistsError(f"{output} already exists; pass --force to rebuild")
         output.unlink()
+    for suffix in ("-wal", "-shm"):
+        sidecar = output.with_name(f"{output.name}{suffix}")
+        if sidecar.exists():
+            sidecar.unlink()
 
     output.parent.mkdir(parents=True, exist_ok=True)
     taxa: dict[str, dict[str, int | str]] = {}
     edges: dict[tuple[str, str], int] = {}
-    descriptions: list[tuple[object, ...]] = []
+    descriptions: dict[str, tuple[object, ...]] = {}
     skipped_bad_paths = 0
 
     with sqlite3.connect(assembled_db) as source:
@@ -156,24 +159,51 @@ def build_runtime_db(
             multimedia_count = int(row["multimedia_count"])
             pageview_count = int(row["pageview_count"] or 0)
             backlink_count = int(row["backlink_count"] or 0)
-            descriptions.append(
-                (
-                    row["target_key"],
-                    row["matched_title"] or row["primary_title"],
-                    row["description"],
-                    word_count,
-                    description_length,
-                    max(2, min(10, word_count // 80)),
-                    multimedia_count,
-                    pageview_count,
-                    backlink_count,
-                    _difficulty_score(
-                        description_length=description_length,
-                        multimedia_count=multimedia_count,
-                        pageview_count=pageview_count,
-                        backlink_count=backlink_count,
-                    ),
-                )
+            descriptions[row["target_key"]] = (
+                row["target_key"],
+                row["matched_title"] or row["primary_title"],
+                row["description"],
+                word_count,
+                description_length,
+                multimedia_count,
+                pageview_count,
+                backlink_count,
+            )
+
+        parent_rows = source.execute(
+            """
+            SELECT
+                t.target_key,
+                t.scientific_name,
+                t.primary_title,
+                t.matched_title,
+                d.word_count,
+                d.description_length,
+                d.multimedia_count,
+                COALESCE(p.pageview_count, t.pageview_count, 0) AS pageview_count,
+                COALESCE(p.backlink_count, t.backlink_count, 0) AS backlink_count,
+                p.description
+            FROM taxon_targets t
+            JOIN taxon_descriptions d ON d.target_key = t.target_key
+            JOIN wikipedia_pages p ON p.title = d.resolved_title
+            WHERE t.kind = 'parent'
+              AND d.extraction_status = 'matched'
+              AND p.extracted_ok = 1
+            ORDER BY t.target_key
+            """
+        )
+        for row in parent_rows:
+            if row["target_key"] not in taxa:
+                continue
+            descriptions[row["target_key"]] = (
+                row["target_key"],
+                row["matched_title"] or row["primary_title"],
+                row["description"],
+                int(row["word_count"]),
+                len(row["description"]),
+                int(row["multimedia_count"]),
+                int(row["pageview_count"] or 0),
+                int(row["backlink_count"] or 0),
             )
 
     with sqlite3.connect(output) as target:
@@ -207,11 +237,9 @@ def build_runtime_db(
                 description TEXT NOT NULL,
                 word_count INTEGER NOT NULL,
                 description_length INTEGER NOT NULL,
-                section_count INTEGER NOT NULL,
                 multimedia_count INTEGER NOT NULL,
                 pageview_count INTEGER NOT NULL,
                 backlink_count INTEGER NOT NULL,
-                difficulty_score REAL NOT NULL,
                 FOREIGN KEY(taxon_key) REFERENCES runtime_taxa(taxon_key)
             );
 
@@ -221,8 +249,6 @@ def build_runtime_db(
                 ON runtime_taxa(scientific_name COLLATE NOCASE);
             CREATE INDEX idx_runtime_edges_parent
                 ON runtime_edges(parent_key);
-            CREATE INDEX idx_runtime_descriptions_score
-                ON runtime_descriptions(difficulty_score);
             """
         )
         target.executemany(
@@ -256,22 +282,25 @@ def build_runtime_db(
                 description,
                 word_count,
                 description_length,
-                section_count,
                 multimedia_count,
                 pageview_count,
-                backlink_count,
-                difficulty_score
+                backlink_count
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            descriptions,
+            sorted(descriptions.values(), key=lambda row: str(row[0])),
         )
         metadata = {
-            "runtime_schema_version": "1",
+            "runtime_schema_version": "2",
             "source_assembled_db": str(assembled_db),
             "dump_date": dump_date,
             "min_description_length": str(min_description_length),
-            "playable_species_count": str(len(descriptions)),
+            "playable_species_count": str(
+                sum(1 for key in descriptions if taxa.get(key, {}).get("rank") == "species")
+            ),
+            "parent_description_count": str(
+                sum(1 for key in descriptions if taxa.get(key, {}).get("rank") != "species")
+            ),
             "taxon_count": str(len(taxa)),
             "edge_count": str(len(edges)),
             "skipped_bad_paths": str(skipped_bad_paths),
@@ -287,7 +316,12 @@ def build_runtime_db(
     return {
         "assembled_db": str(assembled_db),
         "output": str(output),
-        "playable_species_count": len(descriptions),
+        "playable_species_count": sum(
+            1 for key in descriptions if taxa.get(key, {}).get("rank") == "species"
+        ),
+        "parent_description_count": sum(
+            1 for key in descriptions if taxa.get(key, {}).get("rank") != "species"
+        ),
         "taxon_count": len(taxa),
         "edge_count": len(edges),
         "skipped_bad_paths": skipped_bad_paths,
@@ -311,20 +345,6 @@ def _taxon_key(path_pairs: list[tuple[str, str]]) -> str:
     return "taxon:" + json.dumps(path_pairs, ensure_ascii=False, separators=(",", ":"))
 
 
-def _difficulty_score(
-    *,
-    description_length: int,
-    multimedia_count: int,
-    pageview_count: int,
-    backlink_count: int,
-) -> float:
-    description_score = min(35.0, math.log10(max(description_length, 1)) * 8.5)
-    multimedia_score = min(35.0, multimedia_count * 7.0)
-    pageview_score = min(20.0, math.log10(pageview_count + 1) * 4.0)
-    backlink_score = min(10.0, math.log10(backlink_count + 1) * 3.0)
-    return min(100.0, description_score + multimedia_score + pageview_score + backlink_score)
-
-
 def main() -> None:
     args = build_parser().parse_args()
     summary = build_runtime_db(
@@ -346,6 +366,7 @@ def main() -> None:
     if compressed_output:
         print(f"  Compressed asset:     {compressed_output}")
     print(f"  Playable species:     {summary['playable_species_count']:>12,}")
+    print(f"  Parent descriptions:  {summary['parent_description_count']:>12,}")
     print(f"  Taxa:                 {summary['taxon_count']:>12,}")
     print(f"  Edges:                {summary['edge_count']:>12,}")
     print(f"  Skipped bad paths:    {summary['skipped_bad_paths']:>12,}")

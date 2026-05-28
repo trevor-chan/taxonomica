@@ -1,9 +1,10 @@
 """Terminal game engine for Taxonomica."""
 
-from taxonomica.gbif_tree import GBIFTaxonomyTree, TaxonomyNode
 from taxonomica.game.text import split_into_lines, split_into_sentences
 from taxonomica.game.titles import get_rank_title
 from taxonomica.redaction import Redactor, build_redaction_terms_from_node
+from taxonomica.runtime_db import RuntimeTaxonomyData
+from taxonomica.taxonomy import TaxonNode, TaxonomyTree
 from taxonomica.ui import (
     NodeListDisplay,
     SORT_MODE_NAMES,
@@ -13,7 +14,6 @@ from taxonomica.ui import (
     get_sorted_children,
     wrap_text,
 )
-from taxonomica.wikipedia import WikipediaData
 
 
 class TaxonomicaGame:
@@ -34,9 +34,9 @@ class TaxonomicaGame:
     
     def __init__(
         self,
-        tree: GBIFTaxonomyTree,
-        wiki: WikipediaData,
-        target_species: TaxonomyNode,
+        tree: TaxonomyTree,
+        runtime_data: RuntimeTaxonomyData,
+        target_species: TaxonNode,
         description: str,
         initial_chunks: int = DEFAULT_INITIAL_CHUNKS,
         chunks_per_guess: int = DEFAULT_CHUNKS_PER_GUESS,
@@ -47,7 +47,7 @@ class TaxonomicaGame:
         round_number: int | None = None,
     ):
         self.tree = tree
-        self.wiki = wiki
+        self.runtime_data = runtime_data
         self.target = target_species
         self.description = description
         self.end_at_genus = end_at_genus
@@ -111,7 +111,7 @@ class TaxonomicaGame:
             return self.game_ranks[self.current_rank_index]
         return "complete"
     
-    def get_correct_child(self) -> TaxonomyNode | None:
+    def get_correct_child(self) -> TaxonNode | None:
         """Get the correct child node at the current level."""
         current_rank = self.get_current_rank()
         for node in self.correct_path:
@@ -119,7 +119,7 @@ class TaxonomicaGame:
                 return node
         return None
     
-    def get_choices(self) -> list[TaxonomyNode]:
+    def get_choices(self) -> list[TaxonNode]:
         """Get the available choices at the current level."""
         target_rank = self.get_current_rank()
         if target_rank == "complete":
@@ -141,7 +141,7 @@ class TaxonomicaGame:
         
         return choices
     
-    def make_guess(self, choice: TaxonomyNode) -> bool:
+    def make_guess(self, choice: TaxonNode) -> bool:
         """Make a guess. Returns True if correct."""
         self.guesses += 1
         correct_child = self.get_correct_child()
@@ -163,7 +163,7 @@ class TaxonomicaGame:
             self.level_wrong_guesses += 1
             return False
     
-    def _advance_to_next_level(self, node: TaxonomyNode) -> None:
+    def _advance_to_next_level(self, node: TaxonNode) -> None:
         """Advance to the next level after correct guess or guess cap."""
         self.revealed_ranks.add(self.get_current_rank())
         self.redactor.reveal_rank(self.get_current_rank())
@@ -172,7 +172,7 @@ class TaxonomicaGame:
         self.display_config.page = 0  # Reset page for new level
         self.level_wrong_guesses = 0  # Reset level counter
     
-    def apply_guess_cap_penalty(self) -> TaxonomyNode:
+    def apply_guess_cap_penalty(self) -> TaxonNode | None:
         """Apply penalty and auto-advance when guess cap is reached.
         
         Returns:
@@ -206,7 +206,7 @@ class TaxonomicaGame:
         visible_text = self.get_visible_text()
         return self.redactor.redact(visible_text)
     
-    def display(self) -> list[TaxonomyNode]:
+    def display(self) -> list[TaxonNode]:
         """Display the current game state. Returns available choices."""
         clear_screen()
         
@@ -367,8 +367,8 @@ class TaxonomicaGame:
     def _handle_input(
         self,
         choice: str,
-        choices: list[TaxonomyNode],
-    ) -> tuple[str, TaxonomyNode | None]:
+        choices: list[TaxonNode],
+    ) -> tuple[str, TaxonNode | None]:
         """Handle user input and return (action, selected_node)."""
         from taxonomica.ui import label_to_index
         
@@ -406,7 +406,7 @@ class TaxonomicaGame:
         
         return ("invalid", None)
     
-    def show_taxon_info(self, node: TaxonomyNode) -> None:
+    def show_taxon_info(self, node: TaxonNode) -> None:
         """Display Wikipedia information about a taxon."""
         clear_screen()
         
@@ -420,20 +420,16 @@ class TaxonomicaGame:
         print(f"  Descendants: {node.count_descendants():,}")
         
         # Try to get Wikipedia description
-        wiki_entry = self.wiki.match_gbif_taxon(node.name)
-        if wiki_entry:
-            description = wiki_entry.get_useful_text() or wiki_entry.get_abstract()
-            if description:
-                print("\n" + "-" * 100)
-                print("  WIKIPEDIA DESCRIPTION:")
-                print("-" * 100)
-                # Show more text for info view
-                print(wrap_text(description[:3000], width=94))
-                if len(description) > 3000:
-                    print(f"\n  ... and {len(description) - 3000:,} more characters ...")
-                print("-" * 100)
-            else:
-                print("\n  (No description available)")
+        description_entry = self.runtime_data.match_taxon_key(node.id)
+        if description_entry and description_entry.description:
+            description = description_entry.description
+            print("\n" + "-" * 100)
+            print("  WIKIPEDIA DESCRIPTION:")
+            print("-" * 100)
+            print(wrap_text(description[:3000], width=94))
+            if len(description) > 3000:
+                print(f"\n  ... and {len(description) - 3000:,} more characters ...")
+            print("-" * 100)
         else:
             print("\n  (No Wikipedia entry found for this taxon)")
         

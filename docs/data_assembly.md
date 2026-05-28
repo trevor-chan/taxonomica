@@ -334,8 +334,9 @@ assets/game/taxonomica-runtime-20260501.sqlite.gz
 
 The runtime database is built from the assembled `build_tree` output. It omits
 build-only fields such as raw wikitext and dump offsets, and keeps only the
-pruned playable tree, species descriptions, and difficulty signals needed by
-the game.
+pruned playable tree, taxon descriptions, and neutral article metrics needed by
+the game. Difficulty choices are currently UI placeholders and do not affect
+species selection.
 
 ## Rebuild Checklist
 

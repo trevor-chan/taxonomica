@@ -11,7 +11,7 @@ from enum import IntEnum
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
-    from taxonomica.gbif_tree import GBIFTaxonomyTree, TaxonomyNode
+    from taxonomica.taxonomy import TaxonNode
 
 
 class SortMode(IntEnum):
@@ -76,11 +76,11 @@ def wrap_text(text: str, width: int = 76, indent: str = "  ") -> str:
 
 
 def get_sorted_children(
-    node: TaxonomyNode,
+    node: TaxonNode,
     sort_mode: SortMode = SortMode.BY_RANK,
     filter_complete_paths: bool = True,
     filter_rank: str | None = None,
-) -> list[TaxonomyNode]:
+) -> list[TaxonNode]:
     """Get children of a node, sorted and optionally filtered.
     
     Args:
@@ -92,7 +92,7 @@ def get_sorted_children(
     Returns:
         Sorted list of child nodes.
     """
-    from taxonomica.gbif_tree import RANK_PRIORITY
+    from taxonomica.taxonomy import RANK_PRIORITY
     
     children = list(node.children.values())
     
@@ -107,7 +107,7 @@ def get_sorted_children(
     for child in children:
         desc_cache[child.id] = child.count_descendants()
     
-    def sort_key(n: TaxonomyNode) -> tuple:
+    def sort_key(n: TaxonNode) -> tuple:
         desc_count = desc_cache.get(n.id, 0)
         
         if sort_mode == SortMode.BY_DESCENDANTS:
@@ -135,7 +135,7 @@ class NodeListDisplay:
     show_vernacular: bool = True
     show_descendants: bool = True
     
-    def get_page_children(self, children: list[TaxonomyNode]) -> list[TaxonomyNode]:
+    def get_page_children(self, children: list[TaxonNode]) -> list[TaxonNode]:
         """Get the children for the current page."""
         start_idx = self.page * self.page_size
         end_idx = start_idx + self.page_size
@@ -174,7 +174,7 @@ class NodeListDisplay:
 
 
 def display_node_list(
-    children: list[TaxonomyNode],
+    children: list[TaxonNode],
     config: NodeListDisplay,
     header: str = "Children:",
 ) -> None:
@@ -265,14 +265,14 @@ def display_command_bar(
 
 
 def get_user_choice(
-    children: list[TaxonomyNode],
+    children: list[TaxonNode],
     config: NodeListDisplay,
     prompt: str = "  > ",
     allow_navigation: bool = True,
     allow_sort: bool = True,
     allow_filter: bool = True,
     extra_commands: dict[str, Callable[[], bool]] | None = None,
-) -> tuple[str, TaxonomyNode | None]:
+) -> tuple[str, TaxonNode | None]:
     """Get user input and handle navigation commands.
     
     Args:
@@ -346,4 +346,3 @@ def get_user_choice(
                 return ("select", children[absolute_idx])
     
     return ("invalid", None)
-

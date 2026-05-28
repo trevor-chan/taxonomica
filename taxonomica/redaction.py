@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from taxonomica.gbif_tree import TaxonomyNode
+    from taxonomica.taxonomy import TaxonNode
 
 # Standard taxonomic ranks in order from highest to lowest
 TAXONOMIC_RANKS = [
@@ -131,17 +131,17 @@ class RedactionTerms:
         return terms
 
 
-def build_redaction_terms_from_node(node: TaxonomyNode) -> RedactionTerms:
-    """Build redaction terms from a GBIF taxonomy node.
+def build_redaction_terms_from_node(node: TaxonNode) -> RedactionTerms:
+    """Build redaction terms from a taxonomy node.
     
     This extracts the full taxonomic hierarchy and builds a set of
     terms to redact at each level, including:
     - Scientific names
-    - Vernacular names (from GBIF data)
+    - Vernacular names when available
     - Common vernacular equivalents (from mappings)
     
     Args:
-        node: A TaxonomyNode from the GBIF tree.
+        node: A TaxonNode from the runtime tree.
         
     Returns:
         RedactionTerms object with all terms organized by rank.
@@ -353,4 +353,3 @@ class Redactor:
         if len(redacted) > max_length:
             return redacted[:max_length] + "..."
         return redacted
-

@@ -14,6 +14,7 @@ the reproducible data-assembly pipeline used to build gameplay databases.
   hold reusable game helpers.
 - `taxonomica/game/resources/rank_titles.json` contains score title data
   used by the game.
+- `taxonomica/taxonomy.py` contains the game-facing path-keyed tree model.
 - `taxonomica/runtime_db.py` loads the slim playable SQLite asset.
 - `taxonomica/coldp.py` reads Catalogue of Life Data Package archives.
 - `taxonomica/coldp_profile.py` provides memory-light streaming summaries

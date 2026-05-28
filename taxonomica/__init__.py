@@ -12,7 +12,9 @@ from taxonomica.dwca import (
     TypeSpecimen,
     VernacularName,
 )
-from taxonomica.tree import TaxonomyNode, TaxonomyTree
+from taxonomica.taxonomy import MAJOR_RANKS, RANK_PRIORITY, TaxonNode, TaxonomyTree
+from taxonomica.tree import TaxonomyNode as DwCATaxonomyNode
+from taxonomica.tree import TaxonomyTree as DwCATaxonomyTree
 
 # GBIF Backbone parser (complete hierarchies) - recommended
 from taxonomica.gbif_backbone import (
@@ -70,17 +72,15 @@ from taxonomica.popularity import (
 )
 from taxonomica.runtime_db import (
     RuntimeDescription,
-    RuntimePopularityIndex,
-    RuntimePopularityMetrics,
     RuntimeTaxonomyData,
 )
 
 # Playable command-line game
 from taxonomica.game import (
     TaxonomicaGame,
-    find_species_with_wikipedia,
     get_rank_title,
     get_seed_from_string,
+    select_playable_species,
     split_into_lines,
     split_into_sentences,
 )
@@ -106,10 +106,15 @@ __all__ = [
     "Multimedia",
     "SpeciesProfile",
     "Taxon",
-    "TaxonomyNode",
-    "TaxonomyTree",
+    "DwCATaxonomyNode",
+    "DwCATaxonomyTree",
     "TypeSpecimen",
     "VernacularName",
+    # Runtime taxonomy
+    "MAJOR_RANKS",
+    "RANK_PRIORITY",
+    "TaxonNode",
+    "TaxonomyTree",
     # GBIF Backbone (recommended)
     "GBIFBackbone",
     "GBIFMultimedia",
@@ -161,14 +166,12 @@ __all__ = [
     "PopularityIndex",
     "PopularityMetrics",
     "RuntimeDescription",
-    "RuntimePopularityIndex",
-    "RuntimePopularityMetrics",
     "RuntimeTaxonomyData",
     # Game
     "TaxonomicaGame",
-    "find_species_with_wikipedia",
     "get_rank_title",
     "get_seed_from_string",
+    "select_playable_species",
     "split_into_lines",
     "split_into_sentences",
 ]

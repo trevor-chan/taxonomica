@@ -2,27 +2,31 @@ from __future__ import annotations
 
 import sqlite3
 
-from taxonomica.game.selection import find_species_with_wikipedia
+from taxonomica.game.selection import select_playable_species
 from taxonomica.runtime_db import RuntimeTaxonomyData
 
 
-def test_runtime_db_loads_tree_and_selects_species(tmp_path):
+def test_runtime_db_loads_path_keyed_tree_and_selects_species(tmp_path):
     db_path = tmp_path / "runtime.sqlite"
     _write_runtime_fixture(db_path)
 
     data = RuntimeTaxonomyData.from_sqlite(db_path)
+    species = data.tree.find_by_id("s-panthera-leo")
 
-    assert data.tree.root.children
-    assert data.match_gbif_taxon("Panthera leo").title == "Lion"
+    assert species is not None
+    assert species.has_complete_path()
+    assert [node.rank for node in reversed(species.get_path_to_root())][1:] == [
+        "kingdom",
+        "phylum",
+        "class",
+        "order",
+        "family",
+        "genus",
+        "species",
+    ]
+    assert data.tree.find_by_id("g-panthera").count_descendants() == 1
 
-    result = find_species_with_wikipedia(
-        data.tree,
-        data,
-        data.popularity_index,
-        difficulty="easy",
-        seed=1,
-        max_attempts=10,
-    )
+    result = select_playable_species(data, seed=1, difficulty="easy")
 
     assert result is not None
     node, description = result
@@ -30,11 +34,37 @@ def test_runtime_db_loads_tree_and_selects_species(tmp_path):
     assert "large cat" in description
 
 
+def test_seeded_selection_is_deterministic_and_ignores_difficulty(tmp_path):
+    db_path = tmp_path / "runtime.sqlite"
+    _write_runtime_fixture(db_path)
+    data = RuntimeTaxonomyData.from_sqlite(db_path)
+
+    easy = select_playable_species(data, seed=42, difficulty="easy")
+    expert = select_playable_species(data, seed=42, difficulty="expert")
+
+    assert easy is not None
+    assert expert is not None
+    assert easy[0].id == expert[0].id
+    assert easy[1] == expert[1]
+
+
+def test_runtime_descriptions_include_parent_info_when_available(tmp_path):
+    db_path = tmp_path / "runtime.sqlite"
+    _write_runtime_fixture(db_path)
+
+    data = RuntimeTaxonomyData.from_sqlite(db_path)
+
+    assert data.match_taxon_key("g-panthera").title == "Panthera"
+    assert data.match_taxon_key("f-felidae") is None
+    assert data.playable_species_count == 1
+
+
 def _write_runtime_fixture(db_path):
-    description = "\n".join(
+    species_description = "\n".join(
         f"The lion is a large cat in a social pride with a detailed clue line {i}."
         for i in range(13)
     )
+    parent_description = "Panthera is a genus of cats that includes several large species."
     taxa = [
         ("k-animalia", "kingdom", "Animalia", "", 1),
         ("p-chordata", "phylum", "Chordata", "", 1),
@@ -52,6 +82,28 @@ def _write_runtime_fixture(db_path):
         ("o-carnivora", "f-felidae", 1),
         ("f-felidae", "g-panthera", 1),
         ("g-panthera", "s-panthera-leo", 1),
+    ]
+    descriptions = [
+        (
+            "g-panthera",
+            "Panthera",
+            parent_description,
+            len(parent_description.split()),
+            len(parent_description),
+            0,
+            0,
+            0,
+        ),
+        (
+            "s-panthera-leo",
+            "Lion",
+            species_description,
+            len(species_description.split()),
+            len(species_description),
+            5,
+            0,
+            0,
+        ),
     ]
     with sqlite3.connect(db_path) as conn:
         conn.executescript(
@@ -77,11 +129,9 @@ def _write_runtime_fixture(db_path):
                 description TEXT NOT NULL,
                 word_count INTEGER NOT NULL,
                 description_length INTEGER NOT NULL,
-                section_count INTEGER NOT NULL,
                 multimedia_count INTEGER NOT NULL,
                 pageview_count INTEGER NOT NULL,
-                backlink_count INTEGER NOT NULL,
-                difficulty_score REAL NOT NULL
+                backlink_count INTEGER NOT NULL
             );
             """
         )
@@ -109,7 +159,7 @@ def _write_runtime_fixture(db_path):
             """,
             edges,
         )
-        conn.execute(
+        conn.executemany(
             """
             INSERT INTO runtime_descriptions (
                 taxon_key,
@@ -117,24 +167,11 @@ def _write_runtime_fixture(db_path):
                 description,
                 word_count,
                 description_length,
-                section_count,
                 multimedia_count,
                 pageview_count,
-                backlink_count,
-                difficulty_score
+                backlink_count
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (
-                "s-panthera-leo",
-                "Lion",
-                description,
-                len(description.split()),
-                len(description),
-                2,
-                5,
-                0,
-                0,
-                60.0,
-            ),
+            descriptions,
         )

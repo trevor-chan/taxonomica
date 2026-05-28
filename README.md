@@ -115,13 +115,13 @@ launcher now lives at `python experimental/examples/taxonomica_game.py`.
 
 | Level | Description |
 |-------|-------------|
-| **Easy** | Well-known species (top 1% by popularity) |
-| **Medium** | Moderately known species (top 5%) |
-| **Hard** | Less common species (top 25%) |
-| **Expert** | Any species with a Wikipedia entry |
+| **Easy** | Placeholder; currently selects from all playable species |
+| **Medium** | Placeholder; currently selects from all playable species |
+| **Hard** | Placeholder; currently selects from all playable species |
+| **Expert** | Placeholder; currently selects from all playable species |
 
-Difficulty is estimated from runtime signals such as description length,
-multimedia count, and optional pageview/backlink metrics.
+The prompt remains in place so difficulty can be reintroduced once the new
+runtime tree has its own ratings.
 
 ## Example Gameplay
 

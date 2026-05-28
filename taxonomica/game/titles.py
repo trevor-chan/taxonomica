@@ -8,7 +8,7 @@ from importlib import resources
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from taxonomica.gbif_tree import TaxonomyNode
+    from taxonomica.taxonomy import TaxonNode
 
 
 def load_rank_titles() -> dict[str, Any]:
@@ -18,7 +18,7 @@ def load_rank_titles() -> dict[str, Any]:
         return json.load(title_file)
 
 
-def get_rank_title(score: int, target: TaxonomyNode) -> str | None:
+def get_rank_title(score: int, target: TaxonNode) -> str | None:
     """Get a rank title based on score and the target species' taxonomy."""
     titles_data = load_rank_titles()
     if not titles_data or "titles" not in titles_data:

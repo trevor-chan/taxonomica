@@ -76,6 +76,11 @@ The compressed runtime asset is written to:
 assets/game/taxonomica-runtime-20260501.sqlite.gz
 ```
 
+The runtime database stores the pruned playable tree, playable species
+descriptions, and any matched parent-taxon descriptions needed for in-game info
+views. Difficulty choices are currently placeholders and do not affect species
+selection.
+
 ## Useful Audits
 
 Run a small direct extraction spot check:

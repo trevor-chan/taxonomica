@@ -6,7 +6,7 @@ from pathlib import Path
 
 from taxonomica.game.engine import TaxonomicaGame
 from taxonomica.game.prompts import prompt_for_seed, select_difficulty
-from taxonomica.game.selection import find_species_with_wikipedia
+from taxonomica.game.selection import select_playable_species
 from taxonomica.runtime_db import RuntimeTaxonomyData
 
 
@@ -26,10 +26,11 @@ def main(project_root: Path | None = None) -> None:
         return
 
     tree = data.tree
-    popularity_index = data.popularity_index
-    stats = popularity_index.get_stats()
     print(f"    Runtime DB: {data.db_path}")
-    print(f"    Easy: {stats['easy']:,} | Medium: {stats['medium']:,} | Hard: {stats['hard']:,}")
+    print(
+        f"    Taxa: {len(tree._nodes_by_id) - 1:,} | "
+        f"Playable species: {data.playable_species_count:,}"
+    )
 
     seed_string, base_seed = prompt_for_seed()
 
@@ -50,17 +51,15 @@ def main(project_root: Path | None = None) -> None:
             round_seed = None
             print("\n  Loading...")
 
-        result = find_species_with_wikipedia(
-            tree,
+        result = select_playable_species(
             data,
-            popularity_index,
-            difficulty,
             seed=round_seed,
+            difficulty=difficulty,
         )
 
         if not result:
             print("  ERROR: Could not find a species with Wikipedia entry.")
-            print("  Please check that the Wikipedia data is properly loaded.")
+            print("  Please check that the runtime data is properly loaded.")
             return
 
         target_node, description = result
