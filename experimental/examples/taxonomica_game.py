@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Launch Taxonomica from a source checkout."""
+"""Compatibility launcher for the Taxonomica game.
+
+Prefer running `python play.py` from the repository root.
+"""
 
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from taxonomica.game.cli import main

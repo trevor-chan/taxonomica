@@ -1,15 +1,15 @@
 # ColDP Data Experiments
 
-Taxonomica can now read Catalogue of Life Data Package archives as an
-experimental replacement candidate for the older Wikipedia DwC-A taxonomy
-metadata.
+Taxonomica now uses Catalogue of Life Data Package archives as source material
+for the derived gameplay tree built by `build_tree/`, replacing the old runtime
+path that loaded Wikipedia DwC-A and the GBIF Backbone directly.
 
 ## Expected Files
 
 Put downloaded archives under:
 
 ```text
-data/coldp/
+assets/raw/coldp/
 ├── wikidata.zip
 └── wikispecies.zip
 ```
@@ -22,13 +22,13 @@ The reader also accepts extracted folders, as long as they contain
 Build a streaming report for the smaller Wikispecies archive:
 
 ```bash
-python examples/build_coldp_tree.py wikispecies
+python build_tree/tests/build_coldp_tree.py wikispecies
 ```
 
 Build a streaming report for the larger Wikidata archive:
 
 ```bash
-python examples/build_coldp_tree.py wikidata
+python build_tree/tests/build_coldp_tree.py wikidata
 ```
 
 The default mode does not create a full tree. It scans `NameUsage.tsv`, counts
@@ -38,15 +38,15 @@ filtered dataset.
 For a quick parser smoke test without reading a whole archive:
 
 ```bash
-python examples/build_coldp_tree.py wikidata --limit 100000
+python build_tree/tests/build_coldp_tree.py wikidata --limit 100000
 ```
 
 For small archives, or intentionally limited tests, you can still build the
 full in-memory tree:
 
 ```bash
-python examples/build_coldp_tree.py wikispecies --mode tree
-python examples/build_coldp_tree.py wikidata --mode tree --limit 100000 --no-vernacular
+python build_tree/tests/build_coldp_tree.py wikispecies --mode tree
+python build_tree/tests/build_coldp_tree.py wikidata --mode tree --limit 100000 --no-vernacular
 ```
 
 Avoid full `--mode tree` runs on the complete Wikidata archive until we have a
@@ -57,18 +57,18 @@ SQLite-backed or otherwise lazy tree explorer.
 Build or inspect a lazy SQLite index:
 
 ```bash
-python examples/build_coldp_tree.py wikidata --mode sqlite
+python build_tree/tests/build_coldp_tree.py wikidata --mode sqlite
 ```
 
 For a bounded test index:
 
 ```bash
-python examples/build_coldp_tree.py wikidata --mode sqlite --limit 100000
+python build_tree/tests/build_coldp_tree.py wikidata --mode sqlite --limit 100000
 ```
 
 By default, limited indexes use names like
-`data/coldp/wikidata-limit-100000.sqlite` so they are not confused with a full
-`data/coldp/wikidata.sqlite` index. Indexes built with `--include-non-accepted`
+`assets/raw/coldp/wikidata-limit-100000.sqlite` so they are not confused with a full
+`assets/raw/coldp/wikidata.sqlite` index. Indexes built with `--include-non-accepted`
 use an `-all` suffix by default. Pass `--force` to rebuild an existing index.
 
 The SQLite backend stores compact `taxa`, `vernacular_names`, and optional
@@ -78,14 +78,14 @@ paths from SQLite instead of constructing a full Python object graph.
 Browse an existing index:
 
 ```bash
-python examples/explore_coldp_sqlite.py wikispecies
-python examples/explore_coldp_sqlite.py wikidata --limit 100000
+python build_tree/tests/explore_coldp_sqlite.py wikispecies
+python build_tree/tests/explore_coldp_sqlite.py wikidata --limit 100000
 ```
 
 Measure whether species lineages reach the major gameplay ranks:
 
 ```bash
-python examples/build_coldp_tree.py wikispecies --mode sqlite --connectedness
+python build_tree/tests/build_coldp_tree.py wikispecies --mode sqlite --connectedness
 ```
 
 This reports how many species reach each major rank and how many have a full
@@ -106,13 +106,13 @@ The first derived gameplay-tree script combines two sources:
 Build the candidate tree:
 
 ```bash
-python examples/build_candidate_tree.py --force
+python build_tree/build_candidate_tree.py --force
 ```
 
 This writes:
 
 ```text
-data/candidate_trees/wikidata-gbif-candidates.sqlite
+assets/generated/candidate_trees/wikidata-gbif-candidates.sqlite
 ```
 
 The database contains:
@@ -127,14 +127,14 @@ The database contains:
 To inspect an existing candidate database without rebuilding it:
 
 ```bash
-python examples/build_candidate_tree.py
+python build_tree/build_candidate_tree.py
 ```
 
 Useful smoke-test options:
 
 ```bash
-python examples/build_candidate_tree.py --coldp-limit 10000 --force
-python examples/build_candidate_tree.py --coldp-limit 10000 --gbif-limit 200000 --force
+python build_tree/build_candidate_tree.py --coldp-limit 10000 --force
+python build_tree/build_candidate_tree.py --coldp-limit 10000 --gbif-limit 200000 --force
 ```
 
 The output summary distinguishes article-backed rows, unique accepted species,

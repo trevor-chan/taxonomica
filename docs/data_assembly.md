@@ -1,32 +1,45 @@
 # Data Assembly Workflow
 
-This document records the current data sources and repeatable steps used to
-build Taxonomica's derived gameplay data.
+This document records the current source data and repeatable steps used to
+build Taxonomica's derived gameplay database.
 
 ## Goals
 
 The derived dataset should favor gameplay quality over raw taxonomy coverage:
 
-- Species must have a complete seven-rank path:
+- Species should have a complete seven-rank path:
   `kingdom -> phylum -> class -> order -> family -> genus -> species`.
-- Species must have an English Wikipedia article target.
-- Species without usable extracted article text will be culled later.
+- Species should have an English Wikipedia article target.
 - Parent taxa should stay in the tree only when they lead to playable species.
+- Article text should be extracted from a recent English Wikipedia dump.
+- Richness signals such as word count, description length, multimedia count,
+  and pageviews should be stored for future difficulty heuristics.
 
-## Source Data
+For now, matched articles are considered usable regardless of word count. The
+quality fields are stored so later difficulty and culling rules can be changed
+without re-reading the full Wikipedia dump.
+
+## Raw Data Sources
 
 ### GBIF Backbone
 
-Local path:
+Source:
 
 ```text
-backbone/
+https://www.gbif.org/dataset/d7dddbf4-2cf0-4f39-9b2a-bb099caae36c
+```
+
+Download the GBIF Backbone Taxonomy in Simple format, extract it, and place the
+files under:
+
+```text
+assets/raw/gbif-backbone/
 ```
 
 Main file used:
 
 ```text
-backbone/Taxon.tsv
+assets/raw/gbif-backbone/Taxon.tsv
 ```
 
 Role:
@@ -37,10 +50,16 @@ Role:
 
 ### Wikidata ColDP
 
-Local path:
+Source/tooling:
 
 ```text
-data/coldp/wikidata.zip
+https://github.com/CatalogueOfLife/coldp-generator
+```
+
+Expected local path:
+
+```text
+assets/raw/coldp/wikidata.zip
 ```
 
 Role:
@@ -49,21 +68,21 @@ Role:
 - Supplies English Wikipedia article URLs from ColDP `remarks`.
 - Supplies GBIF IDs from ColDP `alternativeID`.
 
-The current candidate build scans `NameUsage.tsv` inside this archive and keeps
+The candidate build scans `NameUsage.tsv` inside this archive and keeps
 accepted species rows with English Wikipedia article URLs.
 
 ### Wikispecies ColDP
 
-Local path:
+Expected local path:
 
 ```text
-data/coldp/wikispecies.zip
+assets/raw/coldp/wikispecies.zip
 ```
 
 Role:
 
 - Useful for taxonomy experiments and comparing source coherence.
-- Not currently used for the candidate gameplay tree because the local ColDP
+- Not currently used for the final candidate gameplay tree because the local
   archive does not expose English Wikipedia article URLs.
 
 ### English Wikipedia Dump
@@ -85,12 +104,12 @@ https://dumps.wikimedia.org/enwiki/20260501/enwiki-20260501-md5sums.txt
 Expected local paths:
 
 ```text
-data/enwiki-20260501-pages-articles-multistream.xml.bz2
-data/enwiki-20260501-pages-articles-multistream-index.txt.bz2
-data/enwiki-20260501-md5sums.txt
+assets/raw/wikipedia-dumps/enwiki-20260501-pages-articles-multistream.xml.bz2
+assets/raw/wikipedia-dumps/enwiki-20260501-pages-articles-multistream-index.txt.bz2
+assets/raw/wikipedia-dumps/enwiki-20260501-md5sums.txt
 ```
 
-Relevant checksums from `data/enwiki-20260501-md5sums.txt`:
+Relevant checksums from `assets/raw/wikipedia-dumps/enwiki-20260501-md5sums.txt`:
 
 ```text
 91ebaa5ef7a221897300c64dc33a0754  enwiki-20260501-pages-articles-multistream.xml.bz2
@@ -100,9 +119,26 @@ ad73b5495de935b74df4fb97416b9cd6  enwiki-20260501-pages-articles-multistream-ind
 Verify downloads on macOS with:
 
 ```bash
-md5 -r data/enwiki-20260501-pages-articles-multistream.xml.bz2
-md5 -r data/enwiki-20260501-pages-articles-multistream-index.txt.bz2
+md5 -r assets/raw/wikipedia-dumps/enwiki-20260501-pages-articles-multistream.xml.bz2
+md5 -r assets/raw/wikipedia-dumps/enwiki-20260501-pages-articles-multistream-index.txt.bz2
 ```
+
+### Optional Popularity Metrics
+
+Local path:
+
+```text
+assets/raw/legacy/species.db
+```
+
+Role:
+
+- Supplies legacy article `pageview_count` values.
+- Also has a `backlink_count` column, but the current local copy stores zeros.
+
+The description database builder indexes both underscore and space-normalized
+versions of each title for matching, so the number of title keys printed during
+assembly is larger than the number of source rows.
 
 ## Generated Artifacts
 
@@ -111,30 +147,31 @@ md5 -r data/enwiki-20260501-pages-articles-multistream-index.txt.bz2
 Build or summarize the current candidate tree:
 
 ```bash
-python examples/build_candidate_tree.py --force
-python examples/build_candidate_tree.py
+python build_tree/build_candidate_tree.py --force
+python build_tree/build_candidate_tree.py
 ```
 
 Output:
 
 ```text
-data/candidate_trees/wikidata-gbif-candidates.sqlite
+assets/generated/candidate_trees/wikidata-gbif-candidates.sqlite
 ```
 
 Current summary:
 
 ```text
-Article-backed rows:           308,995
-Unique accepted species:       302,850
-Duplicate species rows:          6,145
-Parent taxa nodes:              54,381
-Total tree nodes:              357,231
-Candidate edges:               357,223
+Complete species paths:      308,995
+Parent taxa nodes:            54,381
+Total playable nodes:        363,376
+Path-keyed tree nodes:       357,231
+Unique taxon labels:         356,852
+Candidate edges:             357,223
+Unique accepted species:     302,850
 ```
 
 Notes:
 
-- `Article-backed rows` counts candidate rows with distinct Wikipedia URLs.
+- `Complete species paths` counts candidate rows with distinct Wikipedia URLs.
 - `Unique accepted species` counts accepted GBIF species nodes after synonym or
   accepted-name redirects are collapsed.
 - The candidate tree is path-keyed, so homonymous taxa are not accidentally
@@ -145,24 +182,24 @@ Notes:
 Export page titles from the candidate tree:
 
 ```bash
-python utilities/export_wikipedia_targets.py
+python build_tree/export_wikipedia_targets.py
 ```
 
 Outputs:
 
 ```text
-data/wikipedia_targets/enwiki-20260501-candidate-titles.txt
-data/wikipedia_targets/enwiki-20260501-candidate-pages.jsonl
-data/wikipedia_targets/enwiki-20260501-candidate-manifest.json
+assets/generated/wikipedia_targets/enwiki-20260501-candidate-titles.txt
+assets/generated/wikipedia_targets/enwiki-20260501-candidate-pages.jsonl
+assets/generated/wikipedia_targets/enwiki-20260501-candidate-manifest.json
 ```
 
 Current summary:
 
 ```text
-Candidate rows:                308,995
-Target page titles:            308,995
-Invalid URL rows:                    0
-Duplicate title groups:              0
+Candidate rows:              308,995
+Target page titles:          308,995
+Invalid URL rows:                  0
+Duplicate title groups:            0
 ```
 
 `candidate-titles.txt` contains one MediaWiki dump title per line, using spaces
@@ -170,56 +207,25 @@ as they appear in XML `<title>` elements. `candidate-pages.jsonl` stores the
 join metadata needed to connect extracted article text back to Wikidata IDs,
 GBIF IDs, accepted species, and seven-rank paths.
 
-We preserve all article-backed rows at this stage, even when multiple candidate
-rows collapse to the same accepted GBIF species. The extraction and quality
-filtering phase can decide which article, if any, should represent that species.
+### Description Extraction Spot Checks
 
-## Remaining Steps
-
-### Description Extraction
-
-Spot-check extraction from the Wikipedia dump:
+Run a small extraction check against the Wikipedia dump:
 
 ```bash
-python utilities/extract_wikipedia_descriptions.py \
-  --output data/wikipedia_targets/spot-check-descriptions.jsonl
+python build_tree/extract_wikipedia_descriptions.py \
+  --output assets/generated/wikipedia_targets/spot-check-descriptions.jsonl
 ```
-
-This uses the multistream index to seek directly to the bzip2 member containing
-each requested page, rather than scanning the entire 25 GB dump. By default it
-checks a small mixed set:
-
-```text
-Aa achalensis
-Homo sapiens
-Lion
-Monarch butterfly
-? Nycticebus linglom
-```
-
-The extractor currently:
-
-- Finds page offsets in
-  `data/enwiki-20260501-pages-articles-multistream-index.txt.bz2`.
-- Decompresses only the relevant multistream chunks from
-  `data/enwiki-20260501-pages-articles-multistream.xml.bz2`.
-- Extracts page ID, revision ID, timestamp, raw lead wikitext, and cleaned lead
-  text.
-- Follows one redirect hop by default, so `Homo sapiens` resolves to `Human`
-  while retaining the original candidate species metadata.
-- Joins extracted pages back to `candidate_species` records, including GBIF ID,
-  Wikidata ID, accepted species, and seven-rank path.
 
 For a deterministic sample from the target list:
 
 ```bash
-python utilities/extract_wikipedia_descriptions.py --sample 25
+python build_tree/extract_wikipedia_descriptions.py --sample 25
 ```
 
 For hand-picked titles:
 
 ```bash
-python utilities/extract_wikipedia_descriptions.py \
+python build_tree/extract_wikipedia_descriptions.py \
   --title "Canis lupus" \
   --title "Wolf" \
   --title "Escherichia coli"
@@ -228,31 +234,29 @@ python utilities/extract_wikipedia_descriptions.py \
 For a mixed random audit of species plus parent taxa:
 
 ```bash
-python utilities/spot_check_wikipedia_matching.py \
+python build_tree/tests/spot_check_wikipedia_matching.py \
   --total 100 \
   --balanced-parent-ranks \
-  --output data/wikipedia_targets/random-taxa-spot-check.jsonl
+  --output assets/generated/wikipedia_targets/random-taxa-spot-check.jsonl
 ```
 
-This samples explicit species article targets plus parent taxa that are matched
-by exact Wikipedia title. Parent taxa do not yet have Wikidata sitelink targets
-in the candidate tree, so this audit measures a weaker name-based matching
-strategy for those nodes. The audit also tries a conservative parent-title
-alias for GBIF-style suffixes such as `Firmicutes_D -> Firmicutes`; alias
-matches are reported separately from exact matches.
+The spot-check tools use the multistream index to seek directly to the bzip2
+member containing each requested page, rather than scanning the full 25 GB dump.
+The parent-taxon audit uses exact title matching plus conservative aliases such
+as `Firmicutes_D -> Firmicutes`.
 
 The cleaner is intentionally lightweight for now. It removes infoboxes,
 references, categories, and basic wikitext markup, and preserves useful simple
-templates such as `convert` and `gloss`. A full production pass should still
-record raw wikitext alongside cleaned text so that cleaning rules can be
-improved without re-reading the full dump.
+templates such as `convert` and `gloss`. The assembled database stores raw lead
+wikitext alongside cleaned text so cleaning rules can be improved later without
+re-reading the full dump.
 
 ### Full Description Database
 
 Dry-run the full matching plan:
 
 ```bash
-python utilities/build_wikipedia_description_db.py --dry-run
+python build_tree/build_wikipedia_description_db.py --dry-run
 ```
 
 The dry run loads all candidate species and parent taxa, scans the compressed
@@ -262,58 +266,98 @@ and reports how many bzip2 stream offsets a full extraction would touch.
 Current dry-run summary:
 
 ```text
-Targets loaded:                    363,376
-Matched targets:                   360,954  (99.3%)
-Unmatched targets:                   2,422
-Alias-matched targets:                  29
-Unique matched page titles:        358,935
-Unique extraction offsets:         107,835
-Offset coverage:                     42.1%
-Matched-title popularity rows:     232,695
+Targets loaded:              363,376
+Matched targets:             360,954  (99.3%)
+Unmatched targets:             2,422
+Alias-matched targets:            29
+Unique matched page titles:  358,935
+Unique extraction offsets:   107,835
+Offset coverage:               42.1%
+Matched-title popularity rows: 232,695
 ```
 
-The script can also build the assembled SQLite database:
+Build the assembled SQLite database:
 
 ```bash
-python utilities/build_wikipedia_description_db.py --force
+python build_tree/build_wikipedia_description_db.py --force
 ```
 
 Output:
 
 ```text
-data/assembled/taxonomica-20260501.sqlite
+assets/generated/assembled/taxonomica-20260501.sqlite
 ```
 
-Planned tables include:
+The database contains:
 
+- `metadata`: source files, dump date, target counts, and index counts.
 - `taxon_targets`: species and parent taxa, title matches, path metadata,
   optional pageview/backlink counts.
 - `wikipedia_pages`: extracted page text, revision metadata, word count,
   description length, multimedia count, redirect metadata, optional popularity
   counts.
 - `taxon_descriptions`: final target-to-description mapping.
-- `metadata`: source files, dump date, and assembly counts.
 
-For now, a matched page is considered usable regardless of word count. We still
-store word count and description length so future difficulty heuristics can
-prefer richer pages without forcing us to re-read the Wikipedia dump.
+Current assembled database summary:
 
-## Remaining Steps
+```text
+Taxon targets:              363,376
+Matched targets:            360,954
+Unmatched targets:            2,422
+Wikipedia pages:            361,818
+Extracted pages OK:         361,751
+Empty extracted pages:           67
+Matched descriptions:       360,887
+Pages with multimedia:      290,734
+Targets with pageviews:     232,671
+```
 
-1. Build the full description extraction pass over
-   `enwiki-20260501-pages-articles-multistream.xml.bz2`.
-2. Keep pages whose XML title appears in
-   `data/wikipedia_targets/enwiki-20260501-candidate-titles.txt`.
-3. Store extracted descriptions in a SQLite database keyed by requested title
-   and resolved title.
-4. Join descriptions back to `candidate_species`.
-5. Cull candidate species without usable article text.
-6. Write the final playable tree and description database.
+The full extraction touched `107,835` unique bzip2 stream offsets out of
+`255,907` offsets in the multistream index. Each offset represents one
+compressed member containing many pages, so this is the number of compressed
+chunks read, not the number of matched pages.
 
-Open questions:
+### Runtime Game Database
+
+Derive the slim tree and description database used by `python play.py`:
+
+```bash
+python build_tree/build_runtime_db.py --force
+```
+
+Outputs:
+
+```text
+assets/generated/runtime/taxonomica-runtime-20260501.sqlite
+assets/game/taxonomica-runtime-20260501.sqlite.gz
+```
+
+The runtime database is built from the assembled `build_tree` output. It omits
+build-only fields such as raw wikitext and dump offsets, and keeps only the
+pruned playable tree, species descriptions, and difficulty signals needed by
+the game.
+
+## Rebuild Checklist
+
+1. Download or regenerate `assets/raw/coldp/wikidata.zip`.
+2. Download the GBIF Backbone Simple archive and place `Taxon.tsv` under
+   `assets/raw/gbif-backbone/`.
+3. Download the matching English Wikipedia XML dump, multistream index, and
+   checksum file.
+4. Verify the Wikipedia dump checksums.
+5. Run `python build_tree/build_candidate_tree.py --force`.
+6. Run `python build_tree/export_wikipedia_targets.py`.
+7. Optionally run extraction and random-matching spot checks.
+8. Run `python build_tree/build_wikipedia_description_db.py --dry-run`.
+9. Run `python build_tree/build_wikipedia_description_db.py --force`.
+10. Run `python build_tree/build_runtime_db.py --force`.
+11. Inspect assembled and runtime counts before using the database for gameplay.
+
+## Open Questions
 
 - Whether to keep the best article per accepted GBIF species or allow multiple
   synonym/article targets until gameplay selection.
-- Whether parent taxa descriptions should be resolved through Wikidata sitelinks,
-  English Wikipedia exact-title lookup, or a separate parent-taxon target table.
-- What minimum description quality thresholds should be used before culling.
+- Whether parent taxa descriptions should eventually be resolved through
+  Wikidata sitelinks rather than exact-title lookup.
+- What description quality thresholds should be used before culling species or
+  weighting difficulty.

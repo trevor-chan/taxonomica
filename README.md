@@ -8,7 +8,11 @@ Taxonomica is an interactive game where you identify a mystery species by naviga
 
 ## Repository Layout
 
-The main game now lives in the installable package under `src/taxonomica/game/`, with `play.py` as the source-checkout launcher. Exploratory scripts remain in `examples/`, data-building scripts live in `utilities/`, and the Flask interface in `web/` is currently experimental rather than the main development path.
+The main game lives in the installable package under `taxonomica/game/`, with
+`play.py` as the source-checkout launcher. Reproducible data-building scripts
+live in `build_tree/`, raw and generated data live under `assets/`, and
+exploratory scripts, auxiliary utilities, and the Flask interface live in
+`experimental/`.
 
 See [docs/repository_layout.md](docs/repository_layout.md) for the working directory map and development conventions.
 
@@ -16,7 +20,7 @@ See [docs/repository_layout.md](docs/repository_layout.md) for the working direc
 
 When a game begins:
 
-1. **A mystery species is selected** from over 2 million known organisms
+1. **A mystery species is selected** from the derived gameplay tree
 2. **A redacted description appears** — all references to the species name, common name, and taxonomic groups are blocked out
 3. **You navigate the tree** — starting at Kingdom (Animalia? Plantae? Fungi?) and working down through each taxonomic level
 4. **More clues are revealed** — with each guess (right or wrong), additional lines of the description appear
@@ -28,7 +32,8 @@ When a game begins:
 
 You'll need:
 - **Python 3.11 or newer** — [Download Python](https://www.python.org/downloads/)
-- **About 2GB of disk space** for the taxonomy datasets
+- The packaged runtime database under `assets/game/`, or raw assets if you want
+  to rebuild the data pipeline
 
 ### Step 1: Download the Code
 
@@ -59,49 +64,28 @@ pip install -e .
 
 If you get a "pip not found" error, try `pip3 install -e .` instead.
 
-### Step 3: Download the Datasets
+### Step 3: Check Runtime Assets
 
-Taxonomica requires two datasets to run:
+Normal play uses the slim runtime database in `assets/game/`. If the asset is
+compressed, the game decompresses it on first run into `assets/generated/runtime/`.
 
-#### GBIF Backbone Taxonomy (Required)
+The playable folder structure should include:
 
-1. Go to [GBIF Backbone Taxonomy](https://www.gbif.org/dataset/d7dddbf4-2cf0-4f39-9b2a-bb099caae36c)
-2. Click "Download" and select "Simple" format
-3. Extract the downloaded ZIP file
-4. Place the extracted folder in the `taxonomica` directory and rename it to `backbone`
-
-Your folder structure should look like:
 ```
 taxonomica/
 ├── play.py
-├── backbone/
-│   ├── Taxon.tsv
-│   ├── VernacularName.tsv
-│   └── ...
-├── src/
-├── examples/
+├── taxonomica/
+├── assets/
+│   └── game/
+│       └── taxonomica-runtime-YYYYMMDD.sqlite.gz
+├── build_tree/
+├── experimental/
 └── ...
 ```
 
-#### Wikipedia Species Data (Required)
-
-1. Download the Wikipedia Darwin Core Archive from [Wikipedia Species Pages](https://en.wikipedia.org/wiki/Wikipedia:WikiProject_Tree_of_Life/DwC-A)
-2. Extract the ZIP file
-3. Place the extracted folder in the `taxonomica` directory and rename it to `wikipedia-en-dwca`
-
-Your folder structure should now include:
-```
-taxonomica/
-├── play.py
-├── backbone/
-├── wikipedia-en-dwca/
-│   ├── taxon.txt
-│   ├── description.txt
-│   └── ...
-├── src/
-├── examples/
-└── ...
-```
+Raw source datasets are only needed for rebuilds. Put downloaded GBIF,
+Wikipedia dump, and ColDP inputs under `assets/raw/`; generated intermediate
+outputs go under `assets/generated/`.
 
 ## Running the Game
 
@@ -111,7 +95,9 @@ Once everything is installed, start the game:
 python play.py
 ```
 
-If you installed the package in editable mode, you can also run `taxonomica` or `python -m taxonomica.game` from the repository root. The older `python examples/taxonomica_game.py` command still works as a compatibility launcher.
+If you installed the package in editable mode, you can also run `taxonomica` or
+`python -m taxonomica.game` from the repository root. The older compatibility
+launcher now lives at `python experimental/examples/taxonomica_game.py`.
 
 
 ### Controls
@@ -134,7 +120,8 @@ If you installed the package in editable mode, you can also run `taxonomica` or 
 | **Hard** | Less common species (top 25%) |
 | **Expert** | Any species with a Wikipedia entry |
 
-Popularity is estimated from Wikipedia data: description length, number of sections, presence of common names, and multimedia content.
+Difficulty is estimated from runtime signals such as description length,
+multimedia count, and optional pageview/backlink metrics.
 
 ## Example Gameplay
 
@@ -167,17 +154,17 @@ Popularity is estimated from Wikipedia data: description length, number of secti
 Want to just browse the taxonomy tree? Run:
 
 ```bash
-python examples/explore_gbif_tree.py
+python experimental/examples/explore_gbif_tree.py
 ```
 
 This opens an interactive explorer where you can navigate through all kingdoms, phyla, classes, and more.
 
 To inspect the newer Catalogue of Life Data Package downloads, place
-`wikidata.zip` and/or `wikispecies.zip` under `data/coldp/` and run:
+`wikidata.zip` and/or `wikispecies.zip` under `assets/raw/coldp/` and run:
 
 ```bash
-python examples/build_coldp_tree.py wikispecies
-python examples/build_coldp_tree.py wikidata
+python build_tree/tests/build_coldp_tree.py wikispecies
+python build_tree/tests/build_coldp_tree.py wikidata
 ```
 
 The default ColDP path is experimental and memory-light: it streams
@@ -188,21 +175,37 @@ tree. Use `--mode tree` only for smaller archives or limited tests. See
 To build a lazy SQLite index for tree exploration:
 
 ```bash
-python examples/build_coldp_tree.py wikidata --mode sqlite
-python examples/explore_coldp_sqlite.py wikidata
+python build_tree/tests/build_coldp_tree.py wikidata --mode sqlite
+python build_tree/tests/explore_coldp_sqlite.py wikidata
 ```
 
 To assemble the first article-backed, seven-rank candidate gameplay tree from
 Wikidata ColDP plus the GBIF Backbone:
 
 ```bash
-python examples/build_candidate_tree.py --force
+python build_tree/build_candidate_tree.py --force
 ```
 
-This writes `data/candidate_trees/wikidata-gbif-candidates.sqlite` and reports
+This writes `assets/generated/candidate_trees/wikidata-gbif-candidates.sqlite` and reports
 how many species have complete `kingdom -> phylum -> class -> order -> family ->
-genus -> species` paths. The current candidate tree is article-URL backed, but
-does not yet include extracted Wikipedia prose descriptions.
+genus -> species` paths.
+
+To assemble the current candidate description database from the English
+Wikipedia multistream dump:
+
+```bash
+python build_tree/build_wikipedia_description_db.py --force
+```
+
+This writes `assets/generated/assembled/taxonomica-20260501.sqlite`.
+
+To derive the slim playable runtime database and compressed game asset:
+
+```bash
+python build_tree/build_runtime_db.py --force
+```
+
+This writes `assets/game/taxonomica-runtime-20260501.sqlite.gz`.
 
 Data-source and rebuild notes are tracked in
 [docs/data_assembly.md](docs/data_assembly.md).
@@ -212,14 +215,17 @@ Data-source and rebuild notes are tracked in
 ### "ModuleNotFoundError: No module named 'taxonomica'"
 Make sure you ran `pip install -e .` from the `taxonomica` directory.
 
-### "FileNotFoundError: backbone/Taxon.tsv"
-The GBIF Backbone dataset isn't installed. See [Step 3](#step-3-download-the-datasets).
+### "No runtime database found"
+Build or restore `assets/game/taxonomica-runtime-YYYYMMDD.sqlite.gz`, or run
+`python build_tree/build_runtime_db.py --force` after building the assembled DB.
 
 ### "No species found with Wikipedia entries"
-The Wikipedia dataset isn't installed correctly. Make sure the `wikipedia-en-dwca` folder contains `taxon.txt` and `description.txt`.
+The runtime database may be missing playable description rows. Rebuild it from
+the assembled DB and check the build summary.
 
 ### Game is slow to start
-The first run loads millions of taxonomy records. This is normal and takes 1-2 minutes. Subsequent runs are faster.
+The first run may decompress the packaged runtime database. Subsequent runs use
+the cached SQLite file under `assets/generated/runtime/`.
 
 ## Data Sources
 
@@ -234,6 +240,6 @@ MIT
 ## Contributing
 
 Contributions welcome! Feel free to:
-- Add new rank titles to `src/taxonomica/game/resources/rank_titles.json`
+- Add new rank titles to `taxonomica/game/resources/rank_titles.json`
 - Report bugs or suggest features via GitHub Issues
 - Submit pull requests for improvements

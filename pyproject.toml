@@ -39,7 +39,7 @@ web = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/taxonomica"]
+packages = ["taxonomica"]
 
 [tool.ruff]
 line-length = 100

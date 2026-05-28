@@ -48,9 +48,9 @@ htmlcov/
 # Jupyter
 .ipynb_checkpoints/
 
-# Data files (large, downloaded separately)
-wikipedia-en-dwca/
-backbone/
+# Data files (large, downloaded or generated separately)
+assets/raw/
+assets/generated/
 *.txt
 !requirements.txt
 *.gz
@@ -63,10 +63,11 @@ backbone/
 *.sqlite3
 *.sqlite3-*
 *.csv
-data/coldp/
-data/candidate_trees/
-data/wikipedia_targets/
-data/assembled/
+
+# Runtime assets are intentionally commit-eligible.
+!assets/
+!assets/game/
+!assets/game/**
 
 # OS
 .DS_Store
