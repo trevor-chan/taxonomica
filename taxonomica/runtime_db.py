@@ -103,6 +103,15 @@ class RuntimeTaxonomyData:
                     difficulty_level,
                     description_length,
                     article_length,
+                    pageview_count,
+                    difficulty_score,
+                    pageview_score,
+                    article_score,
+                    vernacular_score,
+                    category_score,
+                    category_modifier,
+                    target_rank,
+                    tree_rank,
                     playable_species_count,
                     tree_species_count,
                     easy_species_count,
@@ -132,6 +141,15 @@ class RuntimeTaxonomyData:
                     target_difficulty=row["difficulty_level"],
                     description_length=row["description_length"],
                     article_length=row["article_length"],
+                    pageview_count=row["pageview_count"],
+                    difficulty_score=row["difficulty_score"],
+                    pageview_score=row["pageview_score"],
+                    article_score=row["article_score"],
+                    vernacular_score=row["vernacular_score"],
+                    category_score=row["category_score"],
+                    category_modifier=row["category_modifier"],
+                    target_rank=row["target_rank"],
+                    tree_rank=row["tree_rank"],
                 )
                 tree._register_node(node)
 
@@ -335,6 +353,15 @@ def _clone_node_for_difficulty(
         target_difficulty=node.target_difficulty,
         description_length=node.description_length,
         article_length=node.article_length,
+        pageview_count=node.pageview_count,
+        difficulty_score=node.difficulty_score,
+        pageview_score=node.pageview_score,
+        article_score=node.article_score,
+        vernacular_score=node.vernacular_score,
+        category_score=node.category_score,
+        category_modifier=node.category_modifier,
+        target_rank=node.target_rank,
+        tree_rank=node.tree_rank,
     )
 
 

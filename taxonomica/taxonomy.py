@@ -42,6 +42,15 @@ class TaxonNode:
     target_difficulty: str = ""
     description_length: int = 0
     article_length: int = 0
+    pageview_count: int = 0
+    difficulty_score: float = 0.0
+    pageview_score: float = 0.0
+    article_score: float = 0.0
+    vernacular_score: float = 0.0
+    category_score: float = 0.0
+    category_modifier: int = 0
+    target_rank: int = 0
+    tree_rank: int = 0
 
     def add_child(self, child: TaxonNode) -> None:
         """Attach a child node."""

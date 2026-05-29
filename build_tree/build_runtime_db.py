@@ -7,6 +7,7 @@ import argparse
 import csv
 import gzip
 import json
+import math
 import shutil
 import sqlite3
 import sys
@@ -17,7 +18,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from taxonomica.difficulty import assign_difficulty
+from taxonomica.difficulty import (
+    DIFFICULTY_SCORE_WEIGHTS,
+    TARGET_RANK_CUTOFFS,
+    TREE_RANK_CUTOFFS,
+    category_modifier_for_path,
+    difficulty_for_target_rank,
+    normalized_category_score,
+)
 
 DEFAULT_DUMP_DATE = "20260501"
 DEFAULT_ASSEMBLED_DB = (
@@ -60,17 +68,6 @@ COMMON_NAME_CATEGORY_TERMS = {
     "prey",
     "weed",
     "weeds",
-}
-TARGET_COUNT_FIELDS_BY_DIFFICULTY = {
-    "easy": (
-        "easy_species_count",
-        "medium_species_count",
-        "hard_species_count",
-        "expert_target_species_count",
-    ),
-    "medium": ("medium_species_count", "hard_species_count", "expert_target_species_count"),
-    "hard": ("hard_species_count", "expert_target_species_count"),
-    "expert": ("expert_target_species_count",),
 }
 
 csv.field_size_limit(sys.maxsize)
@@ -148,11 +145,12 @@ def build_runtime_db(
             sidecar.unlink()
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    taxa: dict[str, dict[str, int | str]] = {}
+    taxa: dict[str, dict[str, object]] = {}
     edges: dict[tuple[str, str], int] = {}
     parents: dict[str, str] = {}
     descriptions: dict[str, tuple[object, ...]] = {}
     taxon_gbif_ids: dict[str, str] = {}
+    eligible_target_keys: set[str] = set()
     skipped_bad_paths = 0
 
     with sqlite3.connect(assembled_db) as source:
@@ -163,6 +161,7 @@ def build_runtime_db(
                 t.target_key,
                 t.scientific_name,
                 t.gbif_id,
+                COALESCE(t.pageview_count, 0) AS pageview_count,
                 t.path_json
             FROM taxon_targets t
             WHERE t.kind = 'species'
@@ -189,6 +188,9 @@ def build_runtime_db(
                 parents.setdefault(taxon_key, parent_key)
                 parent_key = taxon_key
 
+            species_taxon = taxa[row["target_key"]]
+            species_taxon["pageview_count"] = int(row["pageview_count"] or 0)
+            species_taxon["category_modifier"] = category_modifier_for_path(path)
             if row["gbif_id"]:
                 taxon_gbif_ids[row["target_key"]] = row["gbif_id"]
 
@@ -224,18 +226,11 @@ def build_runtime_db(
             article_length = len(row["raw_lead_wikitext"] or "")
             taxon["description_length"] = description_length
             taxon["article_length"] = article_length
+            taxon["pageview_count"] = int(row["pageview_count"] or 0)
             if description_length <= min_description_length:
                 continue
 
-            difficulty = assign_difficulty(
-                article_length,
-                expert_threshold=min_description_length,
-            )
-            if not difficulty:
-                continue
-
-            taxon["difficulty_level"] = difficulty
-            _increment_target_counts(taxa, parents, row["target_key"], difficulty)
+            eligible_target_keys.add(row["target_key"])
             descriptions[row["target_key"]] = (
                 row["target_key"],
                 row["matched_title"] or row["primary_title"],
@@ -288,6 +283,11 @@ def build_runtime_db(
         taxa=taxa,
         taxon_gbif_ids=taxon_gbif_ids,
     )
+    score_summary = _score_species(
+        taxa=taxa,
+        parents=parents,
+        eligible_target_keys=eligible_target_keys,
+    )
 
     with sqlite3.connect(output) as target:
         target.execute("PRAGMA journal_mode = WAL")
@@ -307,6 +307,15 @@ def build_runtime_db(
                 difficulty_level TEXT NOT NULL DEFAULT '',
                 description_length INTEGER NOT NULL DEFAULT 0,
                 article_length INTEGER NOT NULL DEFAULT 0,
+                pageview_count INTEGER NOT NULL DEFAULT 0,
+                difficulty_score REAL NOT NULL DEFAULT 0,
+                pageview_score REAL NOT NULL DEFAULT 0,
+                article_score REAL NOT NULL DEFAULT 0,
+                vernacular_score REAL NOT NULL DEFAULT 0,
+                category_score REAL NOT NULL DEFAULT 0,
+                category_modifier INTEGER NOT NULL DEFAULT 0,
+                target_rank INTEGER NOT NULL DEFAULT 0,
+                tree_rank INTEGER NOT NULL DEFAULT 0,
                 playable_species_count INTEGER NOT NULL,
                 tree_species_count INTEGER NOT NULL,
                 easy_species_count INTEGER NOT NULL,
@@ -354,6 +363,15 @@ def build_runtime_db(
                 difficulty_level,
                 description_length,
                 article_length,
+                pageview_count,
+                difficulty_score,
+                pageview_score,
+                article_score,
+                vernacular_score,
+                category_score,
+                category_modifier,
+                target_rank,
+                tree_rank,
                 playable_species_count,
                 tree_species_count,
                 easy_species_count,
@@ -369,6 +387,15 @@ def build_runtime_db(
                 :difficulty_level,
                 :description_length,
                 :article_length,
+                :pageview_count,
+                :difficulty_score,
+                :pageview_score,
+                :article_score,
+                :vernacular_score,
+                :category_score,
+                :category_modifier,
+                :target_rank,
+                :tree_rank,
                 :playable_species_count,
                 :tree_species_count,
                 :easy_species_count,
@@ -407,12 +434,17 @@ def build_runtime_db(
             sorted(descriptions.values(), key=lambda row: str(row[0])),
         )
         metadata = {
-            "runtime_schema_version": "3",
+            "runtime_schema_version": "4",
             "source_assembled_db": str(assembled_db),
             "source_gbif_backbone": str(gbif_backbone),
             "dump_date": dump_date,
             "min_description_length": str(min_description_length),
             "common_name_count": str(common_name_count),
+            "difficulty_score_weights": json.dumps(DIFFICULTY_SCORE_WEIGHTS, sort_keys=True),
+            "target_rank_cutoffs": json.dumps(TARGET_RANK_CUTOFFS, sort_keys=True),
+            "tree_rank_cutoffs": json.dumps(TREE_RANK_CUTOFFS, sort_keys=True),
+            "tree_includes_target_cutoffs": "true",
+            "eligible_target_species_count": str(len(eligible_target_keys)),
             "playable_species_count": str(_species_count(taxa, "tree_species_count")),
             "tree_species_count": str(_species_count(taxa, "tree_species_count")),
             "target_species_count": str(_species_count(taxa, "expert_target_species_count")),
@@ -428,6 +460,10 @@ def build_runtime_db(
             "taxon_count": str(len(taxa)),
             "edge_count": str(len(edges)),
             "skipped_bad_paths": str(skipped_bad_paths),
+            "score_pageview_p01": str(score_summary["pageview_p01"]),
+            "score_pageview_p99": str(score_summary["pageview_p99"]),
+            "score_article_p01": str(score_summary["article_p01"]),
+            "score_article_p99": str(score_summary["article_p99"]),
         }
         target.executemany(
             "INSERT INTO metadata (key, value) VALUES (?, ?)",
@@ -443,6 +479,7 @@ def build_runtime_db(
         "playable_species_count": _species_count(taxa, "tree_species_count"),
         "tree_species_count": _species_count(taxa, "tree_species_count"),
         "target_species_count": _species_count(taxa, "expert_target_species_count"),
+        "eligible_target_species_count": len(eligible_target_keys),
         "easy_species_count": _species_count(taxa, "easy_species_count"),
         "medium_species_count": _species_count(taxa, "medium_species_count"),
         "hard_species_count": _species_count(taxa, "hard_species_count"),
@@ -474,7 +511,7 @@ def _taxon_key(path_pairs: list[tuple[str, str]]) -> str:
     return "taxon:" + json.dumps(path_pairs, ensure_ascii=False, separators=(",", ":"))
 
 
-def _new_taxon(taxon_key: str, rank: str, scientific_name: str) -> dict[str, int | str]:
+def _new_taxon(taxon_key: str, rank: str, scientific_name: str) -> dict[str, object]:
     return {
         "taxon_key": taxon_key,
         "rank": rank,
@@ -483,6 +520,15 @@ def _new_taxon(taxon_key: str, rank: str, scientific_name: str) -> dict[str, int
         "difficulty_level": "",
         "description_length": 0,
         "article_length": 0,
+        "pageview_count": 0,
+        "difficulty_score": 0.0,
+        "pageview_score": 0.0,
+        "article_score": 0.0,
+        "vernacular_score": 0.0,
+        "category_score": 0.0,
+        "category_modifier": 0,
+        "target_rank": 0,
+        "tree_rank": 0,
         "playable_species_count": 0,
         "tree_species_count": 0,
         "easy_species_count": 0,
@@ -492,13 +538,110 @@ def _new_taxon(taxon_key: str, rank: str, scientific_name: str) -> dict[str, int
     }
 
 
-def _increment_target_counts(
-    taxa: dict[str, dict[str, int | str]],
+def _score_species(
+    *,
+    taxa: dict[str, dict[str, object]],
+    parents: dict[str, str],
+    eligible_target_keys: set[str],
+) -> dict[str, float]:
+    species_taxa = [
+        taxon
+        for taxon in taxa.values()
+        if taxon["rank"] == "species"
+    ]
+    pageview_logs = [math.log1p(int(taxon["pageview_count"])) for taxon in species_taxa]
+    article_logs = [math.log1p(int(taxon["article_length"])) for taxon in species_taxa]
+    pageview_p01 = _percentile(pageview_logs, 0.01)
+    pageview_p99 = _percentile(pageview_logs, 0.99)
+    article_p01 = _percentile(article_logs, 0.01)
+    article_p99 = _percentile(article_logs, 0.99)
+
+    for taxon in species_taxa:
+        pageview_score = _normalize(
+            math.log1p(int(taxon["pageview_count"])),
+            pageview_p01,
+            pageview_p99,
+        )
+        article_score = _normalize(
+            math.log1p(int(taxon["article_length"])),
+            article_p01,
+            article_p99,
+        )
+        vernacular_score = 1.0 if taxon["common_name"] else 0.0
+        category_score = normalized_category_score(int(taxon["category_modifier"]))
+        difficulty_score = (
+            DIFFICULTY_SCORE_WEIGHTS["pageviews"] * pageview_score
+            + DIFFICULTY_SCORE_WEIGHTS["article_length"] * article_score
+            + DIFFICULTY_SCORE_WEIGHTS["vernacular"] * vernacular_score
+            + DIFFICULTY_SCORE_WEIGHTS["category"] * category_score
+        )
+        taxon["pageview_score"] = round(pageview_score, 6)
+        taxon["article_score"] = round(article_score, 6)
+        taxon["vernacular_score"] = round(vernacular_score, 6)
+        taxon["category_score"] = round(category_score, 6)
+        taxon["difficulty_score"] = round(difficulty_score, 6)
+
+    ranked_species = sorted(species_taxa, key=_difficulty_sort_key)
+    for rank, taxon in enumerate(ranked_species, start=1):
+        taxon["tree_rank"] = rank
+
+    eligible_targets = [taxa[key] for key in eligible_target_keys if key in taxa]
+    for rank, taxon in enumerate(sorted(eligible_targets, key=_difficulty_sort_key), start=1):
+        taxon["target_rank"] = rank
+        difficulty = difficulty_for_target_rank(rank)
+        if difficulty:
+            taxon["difficulty_level"] = difficulty
+            _increment_count_fields(
+                taxa,
+                parents,
+                str(taxon["taxon_key"]),
+                ["expert_target_species_count"],
+            )
+
+    for taxon in species_taxa:
+        tree_rank = int(taxon["tree_rank"])
+        target_rank = int(taxon["target_rank"])
+        fields = []
+        if _included_in_ranked_tree(tree_rank, target_rank, "easy"):
+            fields.append("easy_species_count")
+        if _included_in_ranked_tree(tree_rank, target_rank, "medium"):
+            fields.append("medium_species_count")
+        if _included_in_ranked_tree(tree_rank, target_rank, "hard"):
+            fields.append("hard_species_count")
+        if fields:
+            _increment_count_fields(taxa, parents, str(taxon["taxon_key"]), fields)
+
+    return {
+        "pageview_p01": pageview_p01,
+        "pageview_p99": pageview_p99,
+        "article_p01": article_p01,
+        "article_p99": article_p99,
+    }
+
+
+def _included_in_ranked_tree(tree_rank: int, target_rank: int, difficulty: str) -> bool:
+    return (
+        tree_rank <= TREE_RANK_CUTOFFS[difficulty]
+        or 0 < target_rank <= TARGET_RANK_CUTOFFS[difficulty]
+    )
+
+
+def _difficulty_sort_key(taxon: dict[str, object]) -> tuple[float, float, float, str, str]:
+    return (
+        -float(taxon["difficulty_score"]),
+        -float(taxon["pageview_score"]),
+        -float(taxon["article_score"]),
+        str(taxon["scientific_name"]).lower(),
+        str(taxon["taxon_key"]),
+    )
+
+
+def _increment_count_fields(
+    taxa: dict[str, dict[str, object]],
     parents: dict[str, str],
     species_key: str,
-    difficulty: str,
+    fields: list[str],
 ) -> None:
-    fields = TARGET_COUNT_FIELDS_BY_DIFFICULTY[difficulty]
     taxon_key = species_key
     while taxon_key and taxon_key != "0":
         taxon = taxa[taxon_key]
@@ -507,7 +650,7 @@ def _increment_target_counts(
         taxon_key = parents.get(taxon_key, "")
 
 
-def _species_count(taxa: dict[str, dict[str, int | str]], field: str) -> int:
+def _species_count(taxa: dict[str, dict[str, object]], field: str) -> int:
     return sum(
         1
         for taxon in taxa.values()
@@ -515,10 +658,25 @@ def _species_count(taxa: dict[str, dict[str, int | str]], field: str) -> int:
     )
 
 
+def _percentile(values: list[float], quantile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = int((len(ordered) - 1) * quantile)
+    return ordered[index]
+
+
+def _normalize(value: float, lower: float, upper: float) -> float:
+    if upper <= lower:
+        return 0.0
+    normalized = (value - lower) / (upper - lower)
+    return max(0.0, min(1.0, normalized))
+
+
 def _populate_common_names(
     *,
     gbif_backbone: Path,
-    taxa: dict[str, dict[str, int | str]],
+    taxa: dict[str, dict[str, object]],
     taxon_gbif_ids: dict[str, str],
 ) -> int:
     """Attach one English common name to runtime taxa when GBIF provides one."""
@@ -555,7 +713,7 @@ def _populate_common_names(
 
 def _resolve_parent_gbif_ids(
     gbif_backbone: Path,
-    taxa: dict[str, dict[str, int | str]],
+    taxa: dict[str, dict[str, object]],
     existing_gbif_ids: dict[str, str],
 ) -> dict[str, str]:
     """Resolve GBIF IDs for path-keyed parent taxa by scanning the Backbone taxon file."""

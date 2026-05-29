@@ -4,11 +4,24 @@ from __future__ import annotations
 
 DIFFICULTY_LEVELS = ("easy", "medium", "hard", "expert")
 
-DIFFICULTY_THRESHOLDS = {
-    "easy": 6_000,
-    "medium": 3_000,
-    "hard": 800,
-    "expert": 400,
+DIFFICULTY_SCORE_WEIGHTS = {
+    "pageviews": 0.50,
+    "article_length": 0.15,
+    "vernacular": 0.10,
+    "category": 0.25,
+}
+
+TARGET_RANK_CUTOFFS = {
+    "easy": 500,
+    "medium": 4_000,
+    "hard": 20_000,
+    "expert": 40_000,
+}
+
+TREE_RANK_CUTOFFS = {
+    "easy": 4_000,
+    "medium": 20_000,
+    "hard": 40_000,
 }
 
 TREE_COUNT_FIELD_BY_DIFFICULTY = {
@@ -32,6 +45,39 @@ TARGET_DIFFICULTIES_BY_MODE = {
     "expert": {"easy", "medium", "hard", "expert"},
 }
 
+CATEGORY_MODIFIERS = {
+    2: {
+        "Canidae",
+        "Carnivora",
+        "Cetacea",
+        "Felidae",
+        "Primates",
+    },
+    1: {
+        "Animalia",
+        "Aves",
+        "Chordata",
+        "Mammalia",
+    },
+    -1: {
+        "Fungi",
+        "Plantae",
+    },
+    -2: {
+        "Archaea",
+        "Bacteria",
+        "Crambidae",
+        "Gelechiidae",
+        "Geometridae",
+        "Lepidoptera",
+        "Noctuidae",
+        "Pyralidae",
+        "Tortricidae",
+    },
+}
+
+CATEGORY_NORMALIZATION_LIMIT = 4
+
 
 def normalize_difficulty(difficulty: str | None) -> str:
     """Return a known difficulty level, defaulting to expert."""
@@ -40,21 +86,33 @@ def normalize_difficulty(difficulty: str | None) -> str:
     return "expert"
 
 
-def assign_difficulty(article_length: int, *, expert_threshold: int = 400) -> str:
-    """Assign a target difficulty from a species article-length metric.
-
-    Thresholds are intentionally strict: a species must exceed the cutoff to
-    enter a tier.
-    """
-    if article_length > DIFFICULTY_THRESHOLDS["easy"]:
-        return "easy"
-    if article_length > DIFFICULTY_THRESHOLDS["medium"]:
-        return "medium"
-    if article_length > DIFFICULTY_THRESHOLDS["hard"]:
-        return "hard"
-    if article_length > expert_threshold:
-        return "expert"
+def difficulty_for_target_rank(target_rank: int) -> str:
+    """Return the inclusive difficulty tier for a scored target rank."""
+    if target_rank <= 0:
+        return ""
+    for difficulty in DIFFICULTY_LEVELS:
+        if target_rank <= TARGET_RANK_CUTOFFS[difficulty]:
+            return difficulty
     return ""
+
+
+def category_modifier_for_path(path_names: list[str]) -> int:
+    """Return the cumulative category modifier for a species path."""
+    modifiers_by_name = {
+        name: modifier
+        for modifier, names in CATEGORY_MODIFIERS.items()
+        for name in names
+    }
+    return sum(modifiers_by_name.get(name, 0) for name in path_names)
+
+
+def normalized_category_score(category_modifier: int) -> float:
+    """Convert a cumulative category modifier into a 0..1 easiness score."""
+    limited = max(
+        -CATEGORY_NORMALIZATION_LIMIT,
+        min(CATEGORY_NORMALIZATION_LIMIT, category_modifier),
+    )
+    return (limited + CATEGORY_NORMALIZATION_LIMIT) / (CATEGORY_NORMALIZATION_LIMIT * 2)
 
 
 def target_allowed_for_difficulty(target_difficulty: str, difficulty: str | None) -> bool:
