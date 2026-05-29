@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import gzip
 import json
 import shutil
 import sqlite3
+import sys
 from pathlib import Path
 
 
@@ -26,7 +28,12 @@ DEFAULT_OUTPUT = (
 DEFAULT_COMPRESSED_OUTPUT = (
     REPO_ROOT / "assets" / "game" / f"taxonomica-runtime-{DEFAULT_DUMP_DATE}.sqlite.gz"
 )
+DEFAULT_GBIF_BACKBONE = REPO_ROOT / "assets" / "raw" / "gbif-backbone"
 MAJOR_RANKS = ["kingdom", "phylum", "class", "order", "family", "genus", "species"]
+COMMON_NAME_LANGUAGES = {"en", "eng"}
+COMMON_NAME_COUNTRY_PRIORITY = {"US": 5, "GB": 4, "CA": 3, "AU": 3, "NZ": 3, "": 2}
+
+csv.field_size_limit(sys.maxsize)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -55,6 +62,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Wikipedia dump date recorded in runtime metadata",
     )
     parser.add_argument(
+        "--gbif-backbone",
+        type=Path,
+        default=DEFAULT_GBIF_BACKBONE,
+        help="GBIF Backbone directory used to add common names",
+    )
+    parser.add_argument(
         "--min-description-length",
         type=int,
         default=400,
@@ -77,6 +90,7 @@ def build_runtime_db(
     *,
     assembled_db: Path,
     output: Path,
+    gbif_backbone: Path,
     dump_date: str,
     min_description_length: int,
     force: bool,
@@ -97,6 +111,7 @@ def build_runtime_db(
     taxa: dict[str, dict[str, int | str]] = {}
     edges: dict[tuple[str, str], int] = {}
     descriptions: dict[str, tuple[object, ...]] = {}
+    taxon_gbif_ids: dict[str, str] = {}
     skipped_bad_paths = 0
 
     with sqlite3.connect(assembled_db) as source:
@@ -106,6 +121,7 @@ def build_runtime_db(
             SELECT
                 t.target_key,
                 t.scientific_name,
+                t.gbif_id,
                 t.primary_title,
                 t.matched_title,
                 t.path_json,
@@ -147,12 +163,16 @@ def build_runtime_db(
                         "taxon_key": taxon_key,
                         "rank": rank,
                         "scientific_name": name,
+                        "common_name": "",
                         "playable_species_count": 0,
                     },
                 )
                 taxon["playable_species_count"] = int(taxon["playable_species_count"]) + 1
                 edges[(parent_key, taxon_key)] = edges.get((parent_key, taxon_key), 0) + 1
                 parent_key = taxon_key
+
+            if row["gbif_id"]:
+                taxon_gbif_ids[row["target_key"]] = row["gbif_id"]
 
             description_length = len(row["description"])
             word_count = int(row["word_count"])
@@ -206,6 +226,12 @@ def build_runtime_db(
                 int(row["backlink_count"] or 0),
             )
 
+    common_name_count = _populate_common_names(
+        gbif_backbone=gbif_backbone,
+        taxa=taxa,
+        taxon_gbif_ids=taxon_gbif_ids,
+    )
+
     with sqlite3.connect(output) as target:
         target.execute("PRAGMA journal_mode = WAL")
         target.execute("PRAGMA synchronous = NORMAL")
@@ -257,9 +283,16 @@ def build_runtime_db(
                 taxon_key,
                 rank,
                 scientific_name,
+                common_name,
                 playable_species_count
             )
-            VALUES (:taxon_key, :rank, :scientific_name, :playable_species_count)
+            VALUES (
+                :taxon_key,
+                :rank,
+                :scientific_name,
+                :common_name,
+                :playable_species_count
+            )
             """,
             sorted(taxa.values(), key=lambda item: (str(item["rank"]), str(item["taxon_key"]))),
         )
@@ -293,8 +326,10 @@ def build_runtime_db(
         metadata = {
             "runtime_schema_version": "2",
             "source_assembled_db": str(assembled_db),
+            "source_gbif_backbone": str(gbif_backbone),
             "dump_date": dump_date,
             "min_description_length": str(min_description_length),
+            "common_name_count": str(common_name_count),
             "playable_species_count": str(
                 sum(1 for key in descriptions if taxa.get(key, {}).get("rank") == "species")
             ),
@@ -324,6 +359,7 @@ def build_runtime_db(
         ),
         "taxon_count": len(taxa),
         "edge_count": len(edges),
+        "common_name_count": common_name_count,
         "skipped_bad_paths": skipped_bad_paths,
         "min_description_length": min_description_length,
     }
@@ -345,11 +381,159 @@ def _taxon_key(path_pairs: list[tuple[str, str]]) -> str:
     return "taxon:" + json.dumps(path_pairs, ensure_ascii=False, separators=(",", ":"))
 
 
+def _populate_common_names(
+    *,
+    gbif_backbone: Path,
+    taxa: dict[str, dict[str, int | str]],
+    taxon_gbif_ids: dict[str, str],
+) -> int:
+    """Attach one English common name to runtime taxa when GBIF provides one."""
+    if not gbif_backbone.exists():
+        return 0
+
+    parent_gbif_ids = _resolve_parent_gbif_ids(gbif_backbone, taxa, taxon_gbif_ids)
+    taxon_gbif_ids.update(parent_gbif_ids)
+
+    wanted_gbif_ids = {gbif_id for gbif_id in taxon_gbif_ids.values() if gbif_id}
+    if not wanted_gbif_ids:
+        return 0
+
+    common_names = _load_english_common_names(gbif_backbone, wanted_gbif_ids)
+    common_name_count = 0
+    for taxon_key, gbif_id in taxon_gbif_ids.items():
+        common_name = common_names.get(gbif_id)
+        taxon = taxa.get(taxon_key)
+        if common_name and taxon is not None:
+            taxon["common_name"] = common_name
+            common_name_count += 1
+
+    return common_name_count
+
+
+def _resolve_parent_gbif_ids(
+    gbif_backbone: Path,
+    taxa: dict[str, dict[str, int | str]],
+    existing_gbif_ids: dict[str, str],
+) -> dict[str, str]:
+    """Resolve GBIF IDs for path-keyed parent taxa by scanning the Backbone taxon file."""
+    taxon_file = gbif_backbone / "Taxon.tsv"
+    if not taxon_file.exists():
+        return {}
+
+    unresolved = {
+        taxon_key
+        for taxon_key, taxon in taxa.items()
+        if taxon["rank"] != "species" and taxon_key not in existing_gbif_ids
+    }
+    if not unresolved:
+        return {}
+
+    resolved: dict[str, str] = {}
+    with open(taxon_file, encoding="utf-8", newline="") as file:
+        reader = csv.reader(file, delimiter="\t")
+        header = next(reader, None)
+        if header is None:
+            return resolved
+        index = {name: position for position, name in enumerate(header)}
+        required_columns = [
+            "taxonID",
+            "taxonRank",
+            "taxonomicStatus",
+            "scientificName",
+            "canonicalName",
+            *MAJOR_RANKS[:-1],
+        ]
+        if any(column not in index for column in required_columns):
+            return resolved
+
+        for row in reader:
+            rank = _cell(row, index["taxonRank"]).lower()
+            if rank not in MAJOR_RANKS[:-1]:
+                continue
+            if _cell(row, index["taxonomicStatus"]).lower() != "accepted":
+                continue
+
+            taxon_key = _gbif_parent_taxon_key(row, index, rank)
+            if taxon_key not in unresolved or taxon_key in resolved:
+                continue
+
+            gbif_id = _cell(row, index["taxonID"])
+            if gbif_id:
+                resolved[taxon_key] = gbif_id
+                if len(resolved) == len(unresolved):
+                    break
+
+    return resolved
+
+
+def _gbif_parent_taxon_key(row: list[str], index: dict[str, int], rank: str) -> str:
+    path_pairs: list[tuple[str, str]] = []
+    for path_rank in MAJOR_RANKS[: MAJOR_RANKS.index(rank) + 1]:
+        name = _cell(row, index[path_rank])
+        if path_rank == rank and not name:
+            name = _cell(row, index["canonicalName"]) or _cell(row, index["scientificName"])
+        if not name:
+            return ""
+        path_pairs.append((path_rank, name))
+    return _taxon_key(path_pairs)
+
+
+def _load_english_common_names(gbif_backbone: Path, wanted_gbif_ids: set[str]) -> dict[str, str]:
+    vernacular_file = gbif_backbone / "VernacularName.tsv"
+    if not vernacular_file.exists():
+        return {}
+
+    selected: dict[str, tuple[int, str]] = {}
+    with open(vernacular_file, encoding="utf-8", newline="") as file:
+        reader = csv.reader(file, delimiter="\t")
+        header = next(reader, None)
+        if header is None:
+            return {}
+        index = {name: position for position, name in enumerate(header)}
+        required_columns = ["taxonID", "vernacularName", "language", "countryCode"]
+        if any(column not in index for column in required_columns):
+            return {}
+
+        for row in reader:
+            taxon_id = _cell(row, index["taxonID"])
+            if taxon_id not in wanted_gbif_ids:
+                continue
+
+            language = _cell(row, index["language"]).lower()
+            if language not in COMMON_NAME_LANGUAGES:
+                continue
+
+            name = _cell(row, index["vernacularName"])
+            if not name:
+                continue
+
+            country_code = _cell(row, index["countryCode"]).upper()
+            score = _common_name_score(language, country_code)
+            current = selected.get(taxon_id)
+            if current is None or score > current[0]:
+                selected[taxon_id] = (score, name)
+
+    return {taxon_id: name for taxon_id, (_, name) in selected.items()}
+
+
+def _common_name_score(language: str, country_code: str) -> int:
+    language_score = 2 if language == "en" else 1
+    country_score = COMMON_NAME_COUNTRY_PRIORITY.get(country_code, 1)
+    return language_score * 10 + country_score
+
+
+def _cell(row: list[str], index: int) -> str:
+    if index >= len(row):
+        return ""
+    return row[index].strip()
+
+
 def main() -> None:
     args = build_parser().parse_args()
     summary = build_runtime_db(
         assembled_db=args.assembled_db,
         output=args.output,
+        gbif_backbone=args.gbif_backbone,
         dump_date=args.dump_date,
         min_description_length=args.min_description_length,
         force=args.force,
@@ -369,6 +553,7 @@ def main() -> None:
     print(f"  Parent descriptions:  {summary['parent_description_count']:>12,}")
     print(f"  Taxa:                 {summary['taxon_count']:>12,}")
     print(f"  Edges:                {summary['edge_count']:>12,}")
+    print(f"  Common names:         {summary['common_name_count']:>12,}")
     print(f"  Skipped bad paths:    {summary['skipped_bad_paths']:>12,}")
     print(f"  Min description len:  {summary['min_description_length']:>12,}")
 

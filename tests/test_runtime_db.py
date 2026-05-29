@@ -14,6 +14,7 @@ def test_runtime_db_loads_path_keyed_tree_and_selects_species(tmp_path):
     species = data.tree.find_by_id("s-panthera-leo")
 
     assert species is not None
+    assert species.vernacular_names == ["lion"]
     assert species.has_complete_path()
     assert [node.rank for node in reversed(species.get_path_to_root())][1:] == [
         "kingdom",
