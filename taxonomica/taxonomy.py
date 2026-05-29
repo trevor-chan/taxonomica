@@ -34,6 +34,14 @@ class TaxonNode:
     scientific_name: str = ""
     vernacular_names: list[str] = field(default_factory=list)
     playable_species_count: int = 0
+    tree_species_count: int = 0
+    easy_species_count: int = 0
+    medium_species_count: int = 0
+    hard_species_count: int = 0
+    expert_target_species_count: int = 0
+    target_difficulty: str = ""
+    description_length: int = 0
+    article_length: int = 0
 
     def add_child(self, child: TaxonNode) -> None:
         """Attach a child node."""

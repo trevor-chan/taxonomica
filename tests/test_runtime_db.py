@@ -25,7 +25,7 @@ def test_runtime_db_loads_path_keyed_tree_and_selects_species(tmp_path):
         "genus",
         "species",
     ]
-    assert data.tree.find_by_id("g-panthera").count_descendants() == 1
+    assert data.tree.find_by_id("g-panthera").count_descendants() == 5
 
     result = select_playable_species(data, seed=1, difficulty="easy")
 
@@ -35,18 +35,51 @@ def test_runtime_db_loads_path_keyed_tree_and_selects_species(tmp_path):
     assert "large cat" in description
 
 
-def test_seeded_selection_is_deterministic_and_ignores_difficulty(tmp_path):
+def test_seeded_selection_is_deterministic_within_difficulty(tmp_path):
     db_path = tmp_path / "runtime.sqlite"
     _write_runtime_fixture(db_path)
     data = RuntimeTaxonomyData.from_sqlite(db_path)
 
-    easy = select_playable_species(data, seed=42, difficulty="easy")
-    expert = select_playable_species(data, seed=42, difficulty="expert")
+    first = select_playable_species(data, seed=42, difficulty="hard")
+    second = select_playable_species(data, seed=42, difficulty="hard")
 
-    assert easy is not None
-    assert expert is not None
-    assert easy[0].id == expert[0].id
-    assert easy[1] == expert[1]
+    assert first is not None
+    assert second is not None
+    assert first[0].id == second[0].id
+    assert first[1] == second[1]
+
+
+def test_difficulty_filters_are_inclusive_and_prune_empty_branches(tmp_path):
+    db_path = tmp_path / "runtime.sqlite"
+    _write_runtime_fixture(db_path)
+
+    data = RuntimeTaxonomyData.from_sqlite(db_path)
+
+    easy = data.for_difficulty("easy")
+    assert easy.playable_species_count == 1
+    assert easy.target_species_count == 1
+    assert easy.tree.find_by_id("k-fungi") is None
+    assert easy.tree.find_by_id("s-panthera-leo") is not None
+    assert easy.tree.find_by_id("s-panthera-pardus") is None
+
+    medium = data.for_difficulty("medium")
+    assert medium.playable_species_count == 2
+    assert medium.target_species_count == 2
+    assert medium.tree.find_by_id("s-panthera-leo") is not None
+    assert medium.tree.find_by_id("s-panthera-pardus") is not None
+    assert medium.tree.find_by_id("s-panthera-onca") is None
+
+    hard = data.for_difficulty("hard")
+    assert hard.playable_species_count == 4
+    assert hard.target_species_count == 4
+    assert hard.tree.find_by_id("k-fungi") is not None
+    assert hard.tree.find_by_id("s-panthera-tigris") is None
+
+    expert = data.for_difficulty("expert")
+    assert expert.playable_species_count == 6
+    assert expert.target_species_count == 5
+    assert expert.tree.find_by_id("s-panthera-short") is not None
+    assert "s-panthera-short" not in expert.target_species_keys
 
 
 def test_runtime_descriptions_include_parent_info_when_available(tmp_path):
@@ -57,54 +90,101 @@ def test_runtime_descriptions_include_parent_info_when_available(tmp_path):
 
     assert data.match_taxon_key("g-panthera").title == "Panthera"
     assert data.match_taxon_key("f-felidae") is None
-    assert data.playable_species_count == 1
+    assert data.playable_species_count == 6
+    assert data.target_species_count == 5
 
 
 def _write_runtime_fixture(db_path):
-    species_description = "\n".join(
-        f"The lion is a large cat in a social pride with a detailed clue line {i}."
-        for i in range(13)
-    )
+    descriptions = {
+        "s-panthera-leo": _pad_description("The lion is a large cat.", 10_050),
+        "s-panthera-pardus": _pad_description("The leopard is a spotted cat.", 2_050),
+        "s-panthera-onca": _pad_description("The jaguar is a powerful cat.", 850),
+        "s-panthera-tigris": _pad_description("The tiger is a striped cat.", 450),
+        "s-agaricus-testus": _pad_description("This mushroom has a cap and gills.", 850),
+    }
     parent_description = "Panthera is a genus of cats that includes several large species."
     taxa = [
-        ("k-animalia", "kingdom", "Animalia", "", 1),
-        ("p-chordata", "phylum", "Chordata", "", 1),
-        ("c-mammalia", "class", "Mammalia", "", 1),
-        ("o-carnivora", "order", "Carnivora", "", 1),
-        ("f-felidae", "family", "Felidae", "", 1),
-        ("g-panthera", "genus", "Panthera", "", 1),
-        ("s-panthera-leo", "species", "Panthera leo", "lion", 1),
+        _taxon("k-animalia", "kingdom", "Animalia", "", "", 0, 5, 1, 2, 3, 4),
+        _taxon("p-chordata", "phylum", "Chordata", "", "", 0, 5, 1, 2, 3, 4),
+        _taxon("c-mammalia", "class", "Mammalia", "", "", 0, 5, 1, 2, 3, 4),
+        _taxon("o-carnivora", "order", "Carnivora", "", "", 0, 5, 1, 2, 3, 4),
+        _taxon("f-felidae", "family", "Felidae", "", "", 0, 5, 1, 2, 3, 4),
+        _taxon("g-panthera", "genus", "Panthera", "", "", 0, 5, 1, 2, 3, 4),
+        _taxon("s-panthera-leo", "species", "Panthera leo", "lion", "easy", 10050, 1, 1, 1, 1, 1),
+        _taxon(
+            "s-panthera-pardus",
+            "species",
+            "Panthera pardus",
+            "leopard",
+            "medium",
+            2050,
+            1,
+            0,
+            1,
+            1,
+            1,
+        ),
+        _taxon("s-panthera-onca", "species", "Panthera onca", "jaguar", "hard", 850, 1, 0, 0, 1, 1),
+        _taxon(
+            "s-panthera-tigris",
+            "species",
+            "Panthera tigris",
+            "tiger",
+            "expert",
+            450,
+            1,
+            0,
+            0,
+            0,
+            1,
+        ),
+        _taxon("s-panthera-short", "species", "Panthera brevis", "", "", 100, 1, 0, 0, 0, 0),
+        _taxon("k-fungi", "kingdom", "Fungi", "", "", 0, 1, 0, 0, 1, 1),
+        _taxon("p-basidiomycota", "phylum", "Basidiomycota", "", "", 0, 1, 0, 0, 1, 1),
+        _taxon("c-agaricomycetes", "class", "Agaricomycetes", "", "", 0, 1, 0, 0, 1, 1),
+        _taxon("o-agaricales", "order", "Agaricales", "", "", 0, 1, 0, 0, 1, 1),
+        _taxon("f-agaricaceae", "family", "Agaricaceae", "", "", 0, 1, 0, 0, 1, 1),
+        _taxon("g-agaricus", "genus", "Agaricus", "", "", 0, 1, 0, 0, 1, 1),
+        _taxon(
+            "s-agaricus-testus",
+            "species",
+            "Agaricus testus",
+            "test mushroom",
+            "hard",
+            850,
+            1,
+            0,
+            0,
+            1,
+            1,
+        ),
     ]
     edges = [
-        ("0", "k-animalia", 1),
-        ("k-animalia", "p-chordata", 1),
-        ("p-chordata", "c-mammalia", 1),
-        ("c-mammalia", "o-carnivora", 1),
-        ("o-carnivora", "f-felidae", 1),
-        ("f-felidae", "g-panthera", 1),
+        ("0", "k-animalia", 5),
+        ("k-animalia", "p-chordata", 5),
+        ("p-chordata", "c-mammalia", 5),
+        ("c-mammalia", "o-carnivora", 5),
+        ("o-carnivora", "f-felidae", 5),
+        ("f-felidae", "g-panthera", 5),
         ("g-panthera", "s-panthera-leo", 1),
+        ("g-panthera", "s-panthera-pardus", 1),
+        ("g-panthera", "s-panthera-onca", 1),
+        ("g-panthera", "s-panthera-tigris", 1),
+        ("g-panthera", "s-panthera-short", 1),
+        ("0", "k-fungi", 1),
+        ("k-fungi", "p-basidiomycota", 1),
+        ("p-basidiomycota", "c-agaricomycetes", 1),
+        ("c-agaricomycetes", "o-agaricales", 1),
+        ("o-agaricales", "f-agaricaceae", 1),
+        ("f-agaricaceae", "g-agaricus", 1),
+        ("g-agaricus", "s-agaricus-testus", 1),
     ]
-    descriptions = [
-        (
-            "g-panthera",
-            "Panthera",
-            parent_description,
-            len(parent_description.split()),
-            len(parent_description),
-            0,
-            0,
-            0,
-        ),
-        (
-            "s-panthera-leo",
-            "Lion",
-            species_description,
-            len(species_description.split()),
-            len(species_description),
-            5,
-            0,
-            0,
-        ),
+    description_rows = [
+        _description_row("g-panthera", "Panthera", parent_description),
+        *[
+            _description_row(taxon_key, taxon_key.removeprefix("s-"), description)
+            for taxon_key, description in descriptions.items()
+        ],
     ]
     with sqlite3.connect(db_path) as conn:
         conn.executescript(
@@ -114,7 +194,15 @@ def _write_runtime_fixture(db_path):
                 rank TEXT NOT NULL,
                 scientific_name TEXT NOT NULL,
                 common_name TEXT NOT NULL DEFAULT '',
-                playable_species_count INTEGER NOT NULL
+                difficulty_level TEXT NOT NULL DEFAULT '',
+                description_length INTEGER NOT NULL DEFAULT 0,
+                article_length INTEGER NOT NULL DEFAULT 0,
+                playable_species_count INTEGER NOT NULL,
+                tree_species_count INTEGER NOT NULL,
+                easy_species_count INTEGER NOT NULL,
+                medium_species_count INTEGER NOT NULL,
+                hard_species_count INTEGER NOT NULL,
+                expert_target_species_count INTEGER NOT NULL
             );
 
             CREATE TABLE runtime_edges (
@@ -143,9 +231,16 @@ def _write_runtime_fixture(db_path):
                 rank,
                 scientific_name,
                 common_name,
-                playable_species_count
+                difficulty_level,
+                description_length,
+                playable_species_count,
+                tree_species_count,
+                easy_species_count,
+                medium_species_count,
+                hard_species_count,
+                expert_target_species_count
             )
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             taxa,
         )
@@ -174,5 +269,53 @@ def _write_runtime_fixture(db_path):
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            descriptions,
+            description_rows,
         )
+
+
+def _taxon(
+    taxon_key,
+    rank,
+    scientific_name,
+    common_name,
+    difficulty_level,
+    description_length,
+    tree_species_count,
+    easy_species_count,
+    medium_species_count,
+    hard_species_count,
+    expert_target_species_count,
+):
+    return (
+        taxon_key,
+        rank,
+        scientific_name,
+        common_name,
+        difficulty_level,
+        description_length,
+        tree_species_count,
+        tree_species_count,
+        easy_species_count,
+        medium_species_count,
+        hard_species_count,
+        expert_target_species_count,
+    )
+
+
+def _description_row(taxon_key, title, description):
+    return (
+        taxon_key,
+        title,
+        description,
+        len(description.split()),
+        len(description),
+        0,
+        0,
+        0,
+    )
+
+
+def _pad_description(text, minimum_length):
+    while len(text) <= minimum_length:
+        text += " detail"
+    return text

@@ -25,11 +25,11 @@ def main(project_root: Path | None = None) -> None:
         print(f"\n  ERROR: {exc}")
         return
 
-    tree = data.tree
     print(f"    Runtime DB: {data.db_path}")
     print(
-        f"    Taxa: {len(tree._nodes_by_id) - 1:,} | "
-        f"Playable species: {data.playable_species_count:,}"
+        f"    Taxa: {len(data.tree._nodes_by_id) - 1:,} | "
+        f"Species in full tree: {data.playable_species_count:,} | "
+        f"Target species: {data.target_species_count:,}"
     )
 
     seed_string, base_seed = prompt_for_seed()
@@ -38,6 +38,9 @@ def main(project_root: Path | None = None) -> None:
         print(f"\n  Using seed: \"{seed_string}\"")
 
     difficulty = select_difficulty()
+    active_data = data.for_difficulty(difficulty)
+    tree = active_data.tree
+    print(f"\n  Playing with {active_data.playable_species_count:,} species.")
 
     round_number = 1
     cumulative_score = 0
@@ -52,7 +55,7 @@ def main(project_root: Path | None = None) -> None:
             print("\n  Loading...")
 
         result = select_playable_species(
-            data,
+            active_data,
             seed=round_seed,
             difficulty=difficulty,
         )
@@ -65,7 +68,7 @@ def main(project_root: Path | None = None) -> None:
         target_node, description = result
         game = TaxonomicaGame(
             tree,
-            data,
+            active_data,
             target_node,
             description,
             difficulty=difficulty,

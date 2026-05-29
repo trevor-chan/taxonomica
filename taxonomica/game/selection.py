@@ -14,18 +14,15 @@ def select_playable_species(
     seed: int | None = None,
     difficulty: str | None = None,
 ) -> tuple[TaxonNode, str] | None:
-    """Select a playable species from the runtime database.
-
-    Difficulty is intentionally ignored until the new runtime tree has ratings.
-    """
-    _ = difficulty
+    """Select a playable species from the active runtime target pool."""
+    data = data.for_difficulty(difficulty)
     species_nodes = [
         node
         for node in data.playable_species_nodes
         if node.has_complete_path() and data.match_taxon_key(node.id)
     ]
 
-    print(f"  Found {len(species_nodes):,} eligible species")
+    print(f"  Found {len(species_nodes):,} eligible target species")
 
     if not species_nodes:
         return None

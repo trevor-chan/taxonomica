@@ -14,6 +14,11 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from taxonomica.difficulty import assign_difficulty
+
 DEFAULT_DUMP_DATE = "20260501"
 DEFAULT_ASSEMBLED_DB = (
     REPO_ROOT / "assets" / "generated" / "assembled" / f"taxonomica-{DEFAULT_DUMP_DATE}.sqlite"
@@ -32,6 +37,17 @@ DEFAULT_GBIF_BACKBONE = REPO_ROOT / "assets" / "raw" / "gbif-backbone"
 MAJOR_RANKS = ["kingdom", "phylum", "class", "order", "family", "genus", "species"]
 COMMON_NAME_LANGUAGES = {"en", "eng"}
 COMMON_NAME_COUNTRY_PRIORITY = {"US": 5, "GB": 4, "CA": 3, "AU": 3, "NZ": 3, "": 2}
+TARGET_COUNT_FIELDS_BY_DIFFICULTY = {
+    "easy": (
+        "easy_species_count",
+        "medium_species_count",
+        "hard_species_count",
+        "expert_target_species_count",
+    ),
+    "medium": ("medium_species_count", "hard_species_count", "expert_target_species_count"),
+    "hard": ("hard_species_count", "expert_target_species_count"),
+    "expert": ("expert_target_species_count",),
+}
 
 csv.field_size_limit(sys.maxsize)
 
@@ -71,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--min-description-length",
         type=int,
         default=400,
-        help="Minimum description length for playable species",
+        help="Expert target cutoff; target descriptions must be longer than this many chars",
     )
     parser.add_argument(
         "--force",
@@ -110,43 +126,28 @@ def build_runtime_db(
     output.parent.mkdir(parents=True, exist_ok=True)
     taxa: dict[str, dict[str, int | str]] = {}
     edges: dict[tuple[str, str], int] = {}
+    parents: dict[str, str] = {}
     descriptions: dict[str, tuple[object, ...]] = {}
     taxon_gbif_ids: dict[str, str] = {}
     skipped_bad_paths = 0
 
     with sqlite3.connect(assembled_db) as source:
         source.row_factory = sqlite3.Row
-        rows = source.execute(
+        species_rows = source.execute(
             """
             SELECT
                 t.target_key,
                 t.scientific_name,
                 t.gbif_id,
-                t.primary_title,
-                t.matched_title,
-                t.path_json,
-                COALESCE(t.pageview_count, 0) AS target_pageview_count,
-                COALESCE(t.backlink_count, 0) AS target_backlink_count,
-                d.word_count,
-                d.description_length,
-                d.multimedia_count,
-                COALESCE(p.pageview_count, t.pageview_count, 0) AS pageview_count,
-                COALESCE(p.backlink_count, t.backlink_count, 0) AS backlink_count,
-                p.description
+                t.path_json
             FROM taxon_targets t
-            JOIN taxon_descriptions d ON d.target_key = t.target_key
-            JOIN wikipedia_pages p ON p.title = d.resolved_title
             WHERE t.kind = 'species'
               AND t.rank = 'species'
-              AND d.extraction_status = 'matched'
-              AND p.extracted_ok = 1
-              AND length(p.description) >= ?
             ORDER BY t.target_key
-            """,
-            (min_description_length,),
+            """
         )
 
-        for row in rows:
+        for row in species_rows:
             path = json.loads(row["path_json"])
             if len(path) != len(MAJOR_RANKS) or any(not name for name in path):
                 skipped_bad_paths += 1
@@ -157,37 +158,69 @@ def build_runtime_db(
             for rank, name in zip(MAJOR_RANKS, path):
                 path_pairs.append((rank, name))
                 taxon_key = row["target_key"] if rank == "species" else _taxon_key(path_pairs)
-                taxon = taxa.setdefault(
-                    taxon_key,
-                    {
-                        "taxon_key": taxon_key,
-                        "rank": rank,
-                        "scientific_name": name,
-                        "common_name": "",
-                        "playable_species_count": 0,
-                    },
-                )
-                taxon["playable_species_count"] = int(taxon["playable_species_count"]) + 1
+                taxon = taxa.setdefault(taxon_key, _new_taxon(taxon_key, rank, name))
+                taxon["tree_species_count"] = int(taxon["tree_species_count"]) + 1
+                taxon["playable_species_count"] = int(taxon["tree_species_count"])
                 edges[(parent_key, taxon_key)] = edges.get((parent_key, taxon_key), 0) + 1
+                parents.setdefault(taxon_key, parent_key)
                 parent_key = taxon_key
 
             if row["gbif_id"]:
                 taxon_gbif_ids[row["target_key"]] = row["gbif_id"]
 
+        description_rows = source.execute(
+            """
+            SELECT
+                t.target_key,
+                t.primary_title,
+                t.matched_title,
+                d.word_count,
+                d.multimedia_count,
+                COALESCE(p.pageview_count, t.pageview_count, 0) AS pageview_count,
+                COALESCE(p.backlink_count, t.backlink_count, 0) AS backlink_count,
+                p.raw_lead_wikitext,
+                p.description
+            FROM taxon_targets t
+            JOIN taxon_descriptions d ON d.target_key = t.target_key
+            JOIN wikipedia_pages p ON p.title = d.resolved_title
+            WHERE t.kind = 'species'
+              AND t.rank = 'species'
+              AND d.extraction_status = 'matched'
+              AND p.extracted_ok = 1
+            ORDER BY t.target_key
+            """
+        )
+
+        for row in description_rows:
+            taxon = taxa.get(row["target_key"])
+            if taxon is None:
+                continue
+
             description_length = len(row["description"])
-            word_count = int(row["word_count"])
-            multimedia_count = int(row["multimedia_count"])
-            pageview_count = int(row["pageview_count"] or 0)
-            backlink_count = int(row["backlink_count"] or 0)
+            article_length = len(row["raw_lead_wikitext"] or "")
+            taxon["description_length"] = description_length
+            taxon["article_length"] = article_length
+            if description_length <= min_description_length:
+                continue
+
+            difficulty = assign_difficulty(
+                article_length,
+                expert_threshold=min_description_length,
+            )
+            if not difficulty:
+                continue
+
+            taxon["difficulty_level"] = difficulty
+            _increment_target_counts(taxa, parents, row["target_key"], difficulty)
             descriptions[row["target_key"]] = (
                 row["target_key"],
                 row["matched_title"] or row["primary_title"],
                 row["description"],
-                word_count,
+                int(row["word_count"]),
                 description_length,
-                multimedia_count,
-                pageview_count,
-                backlink_count,
+                int(row["multimedia_count"]),
+                int(row["pageview_count"] or 0),
+                int(row["backlink_count"] or 0),
             )
 
         parent_rows = source.execute(
@@ -247,7 +280,15 @@ def build_runtime_db(
                 rank TEXT NOT NULL,
                 scientific_name TEXT NOT NULL,
                 common_name TEXT NOT NULL DEFAULT '',
-                playable_species_count INTEGER NOT NULL
+                difficulty_level TEXT NOT NULL DEFAULT '',
+                description_length INTEGER NOT NULL DEFAULT 0,
+                article_length INTEGER NOT NULL DEFAULT 0,
+                playable_species_count INTEGER NOT NULL,
+                tree_species_count INTEGER NOT NULL,
+                easy_species_count INTEGER NOT NULL,
+                medium_species_count INTEGER NOT NULL,
+                hard_species_count INTEGER NOT NULL,
+                expert_target_species_count INTEGER NOT NULL
             );
 
             CREATE TABLE runtime_edges (
@@ -273,6 +314,8 @@ def build_runtime_db(
                 ON runtime_taxa(rank);
             CREATE INDEX idx_runtime_taxa_name
                 ON runtime_taxa(scientific_name COLLATE NOCASE);
+            CREATE INDEX idx_runtime_taxa_difficulty
+                ON runtime_taxa(difficulty_level);
             CREATE INDEX idx_runtime_edges_parent
                 ON runtime_edges(parent_key);
             """
@@ -284,14 +327,30 @@ def build_runtime_db(
                 rank,
                 scientific_name,
                 common_name,
-                playable_species_count
+                difficulty_level,
+                description_length,
+                article_length,
+                playable_species_count,
+                tree_species_count,
+                easy_species_count,
+                medium_species_count,
+                hard_species_count,
+                expert_target_species_count
             )
             VALUES (
                 :taxon_key,
                 :rank,
                 :scientific_name,
                 :common_name,
-                :playable_species_count
+                :difficulty_level,
+                :description_length,
+                :article_length,
+                :playable_species_count,
+                :tree_species_count,
+                :easy_species_count,
+                :medium_species_count,
+                :hard_species_count,
+                :expert_target_species_count
             )
             """,
             sorted(taxa.values(), key=lambda item: (str(item["rank"]), str(item["taxon_key"]))),
@@ -324,14 +383,20 @@ def build_runtime_db(
             sorted(descriptions.values(), key=lambda row: str(row[0])),
         )
         metadata = {
-            "runtime_schema_version": "2",
+            "runtime_schema_version": "3",
             "source_assembled_db": str(assembled_db),
             "source_gbif_backbone": str(gbif_backbone),
             "dump_date": dump_date,
             "min_description_length": str(min_description_length),
             "common_name_count": str(common_name_count),
-            "playable_species_count": str(
-                sum(1 for key in descriptions if taxa.get(key, {}).get("rank") == "species")
+            "playable_species_count": str(_species_count(taxa, "tree_species_count")),
+            "tree_species_count": str(_species_count(taxa, "tree_species_count")),
+            "target_species_count": str(_species_count(taxa, "expert_target_species_count")),
+            "easy_species_count": str(_species_count(taxa, "easy_species_count")),
+            "medium_species_count": str(_species_count(taxa, "medium_species_count")),
+            "hard_species_count": str(_species_count(taxa, "hard_species_count")),
+            "expert_target_species_count": str(
+                _species_count(taxa, "expert_target_species_count")
             ),
             "parent_description_count": str(
                 sum(1 for key in descriptions if taxa.get(key, {}).get("rank") != "species")
@@ -351,9 +416,13 @@ def build_runtime_db(
     return {
         "assembled_db": str(assembled_db),
         "output": str(output),
-        "playable_species_count": sum(
-            1 for key in descriptions if taxa.get(key, {}).get("rank") == "species"
-        ),
+        "playable_species_count": _species_count(taxa, "tree_species_count"),
+        "tree_species_count": _species_count(taxa, "tree_species_count"),
+        "target_species_count": _species_count(taxa, "expert_target_species_count"),
+        "easy_species_count": _species_count(taxa, "easy_species_count"),
+        "medium_species_count": _species_count(taxa, "medium_species_count"),
+        "hard_species_count": _species_count(taxa, "hard_species_count"),
+        "expert_target_species_count": _species_count(taxa, "expert_target_species_count"),
         "parent_description_count": sum(
             1 for key in descriptions if taxa.get(key, {}).get("rank") != "species"
         ),
@@ -379,6 +448,47 @@ def compress_runtime_db(source: Path, output: Path, *, force: bool) -> None:
 
 def _taxon_key(path_pairs: list[tuple[str, str]]) -> str:
     return "taxon:" + json.dumps(path_pairs, ensure_ascii=False, separators=(",", ":"))
+
+
+def _new_taxon(taxon_key: str, rank: str, scientific_name: str) -> dict[str, int | str]:
+    return {
+        "taxon_key": taxon_key,
+        "rank": rank,
+        "scientific_name": scientific_name,
+        "common_name": "",
+        "difficulty_level": "",
+        "description_length": 0,
+        "article_length": 0,
+        "playable_species_count": 0,
+        "tree_species_count": 0,
+        "easy_species_count": 0,
+        "medium_species_count": 0,
+        "hard_species_count": 0,
+        "expert_target_species_count": 0,
+    }
+
+
+def _increment_target_counts(
+    taxa: dict[str, dict[str, int | str]],
+    parents: dict[str, str],
+    species_key: str,
+    difficulty: str,
+) -> None:
+    fields = TARGET_COUNT_FIELDS_BY_DIFFICULTY[difficulty]
+    taxon_key = species_key
+    while taxon_key and taxon_key != "0":
+        taxon = taxa[taxon_key]
+        for field in fields:
+            taxon[field] = int(taxon[field]) + 1
+        taxon_key = parents.get(taxon_key, "")
+
+
+def _species_count(taxa: dict[str, dict[str, int | str]], field: str) -> int:
+    return sum(
+        1
+        for taxon in taxa.values()
+        if taxon["rank"] == "species" and int(taxon[field]) > 0
+    )
 
 
 def _populate_common_names(
@@ -549,7 +659,12 @@ def main() -> None:
     print(f"  Runtime DB:           {summary['output']}")
     if compressed_output:
         print(f"  Compressed asset:     {compressed_output}")
-    print(f"  Playable species:     {summary['playable_species_count']:>12,}")
+    print(f"  Tree species:         {summary['tree_species_count']:>12,}")
+    print(f"  Target species:       {summary['target_species_count']:>12,}")
+    print(f"    Easy tree:          {summary['easy_species_count']:>12,}")
+    print(f"    Medium tree:        {summary['medium_species_count']:>12,}")
+    print(f"    Hard tree:          {summary['hard_species_count']:>12,}")
+    print(f"    Expert targets:     {summary['expert_target_species_count']:>12,}")
     print(f"  Parent descriptions:  {summary['parent_description_count']:>12,}")
     print(f"  Taxa:                 {summary['taxon_count']:>12,}")
     print(f"  Edges:                {summary['edge_count']:>12,}")

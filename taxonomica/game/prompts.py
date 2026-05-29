@@ -13,7 +13,7 @@ def prompt_for_seed() -> tuple[str | None, int | None]:
     print()
     print("  For competitive play, enter a seed word/phrase.")
     print("  Players with the same seed get the same species.")
-    print("  Difficulty choices are placeholders while ratings are rebuilt.")
+    print("  Difficulty changes both the target pool and the visible tree.")
     print()
     print("  Leave blank for a random species.")
     print()
