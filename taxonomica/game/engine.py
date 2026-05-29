@@ -188,6 +188,12 @@ class TaxonomicaGame:
     def is_at_guess_cap(self) -> bool:
         """Check if player has reached the guess cap for this level."""
         return self.level_wrong_guesses >= self.MAX_GUESSES_PER_LEVEL
+
+    def _format_taxon_name(self, node: TaxonNode) -> str:
+        """Return a scientific name with a common name in parentheses when available."""
+        if node.vernacular_names:
+            return f"{node.name} ({node.vernacular_names[0]})"
+        return node.name
     
     def is_complete(self) -> bool:
         """Check if the game is complete."""
@@ -362,6 +368,9 @@ class TaxonomicaGame:
         print(wrap_text(self.description[:2000], width=94))
         if len(self.description) > 2000:
             print(f"\n  ... and {len(self.description) - 2000:,} more characters ...")
+        description_entry = self.runtime_data.match_taxon_key(self.target.id)
+        if description_entry:
+            print(f"\n  Wikipedia: {description_entry.wikipedia_url}")
         print("-" * 100)
     
     def _handle_input(
@@ -519,9 +528,7 @@ class TaxonomicaGame:
                     if self.is_at_guess_cap():
                         correct_node = self.apply_guess_cap_penalty()
                         print(f"\n  ✗ Out of guesses for this level!{reveal_msg}")
-                        print(f"    The answer was: {correct_node.name}")
-                        if correct_node.vernacular_names:
-                            print(f"    Common name: {correct_node.vernacular_names[0]}")
+                        print(f"    The answer was: {self._format_taxon_name(correct_node)}")
                         print(f"    (+{self.GUESS_CAP_PENALTY} penalty, advancing to next level)")
                         input("  Press Enter to continue...")
                     else:

@@ -7,6 +7,7 @@ import shutil
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 from taxonomica.difficulty import (
     normalize_difficulty,
@@ -33,6 +34,11 @@ class RuntimeDescription:
     multimedia_count: int
     pageview_count: int
     backlink_count: int
+
+    @property
+    def wikipedia_url(self) -> str:
+        """Return the English Wikipedia URL for this description title."""
+        return f"https://en.wikipedia.org/wiki/{quote(self.title.replace(' ', '_'))}"
 
 
 class RuntimeTaxonomyData:

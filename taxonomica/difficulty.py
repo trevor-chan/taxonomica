@@ -47,32 +47,28 @@ TARGET_DIFFICULTIES_BY_MODE = {
 
 CATEGORY_MODIFIERS = {
     2: {
+        "Chordata",
+        "Animalia",
+    },
+    1: {
+        "Mammalia",
         "Canidae",
         "Carnivora",
         "Cetacea",
         "Felidae",
         "Primates",
     },
-    1: {
-        "Animalia",
-        "Aves",
-        "Chordata",
-        "Mammalia",
-    },
     -1: {
-        "Fungi",
         "Plantae",
     },
     -2: {
         "Archaea",
         "Bacteria",
-        "Crambidae",
-        "Gelechiidae",
-        "Geometridae",
+        "Viruses",
         "Lepidoptera",
-        "Noctuidae",
-        "Pyralidae",
-        "Tortricidae",
+        "Chromista",
+        "Protozoa",
+        "Fungi",
     },
 }
 
