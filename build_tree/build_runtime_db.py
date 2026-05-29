@@ -37,6 +37,30 @@ DEFAULT_GBIF_BACKBONE = REPO_ROOT / "assets" / "raw" / "gbif-backbone"
 MAJOR_RANKS = ["kingdom", "phylum", "class", "order", "family", "genus", "species"]
 COMMON_NAME_LANGUAGES = {"en", "eng"}
 COMMON_NAME_COUNTRY_PRIORITY = {"US": 5, "GB": 4, "CA": 3, "AU": 3, "NZ": 3, "": 2}
+COMMON_NAME_CATEGORY_TERMS = {
+    "carnivore",
+    "carnivores",
+    "cultivated plant",
+    "domestic animal",
+    "domesticated animal",
+    "herbivore",
+    "herbivores",
+    "host",
+    "hosts",
+    "introduced species",
+    "invasive species",
+    "omnivore",
+    "omnivores",
+    "parasite",
+    "parasites",
+    "pest",
+    "pests",
+    "predator",
+    "predators",
+    "prey",
+    "weed",
+    "weeds",
+}
 TARGET_COUNT_FIELDS_BY_DIFFICULTY = {
     "easy": (
         "easy_species_count",
@@ -508,7 +532,16 @@ def _populate_common_names(
     if not wanted_gbif_ids:
         return 0
 
-    common_names = _load_english_common_names(gbif_backbone, wanted_gbif_ids)
+    ranks_by_gbif_id = {
+        gbif_id: str(taxon["rank"])
+        for taxon_key, gbif_id in taxon_gbif_ids.items()
+        if gbif_id and (taxon := taxa.get(taxon_key)) is not None
+    }
+    common_names = _load_english_common_names(
+        gbif_backbone,
+        wanted_gbif_ids,
+        ranks_by_gbif_id,
+    )
     common_name_count = 0
     for taxon_key, gbif_id in taxon_gbif_ids.items():
         common_name = common_names.get(gbif_id)
@@ -588,7 +621,11 @@ def _gbif_parent_taxon_key(row: list[str], index: dict[str, int], rank: str) -> 
     return _taxon_key(path_pairs)
 
 
-def _load_english_common_names(gbif_backbone: Path, wanted_gbif_ids: set[str]) -> dict[str, str]:
+def _load_english_common_names(
+    gbif_backbone: Path,
+    wanted_gbif_ids: set[str],
+    ranks_by_gbif_id: dict[str, str],
+) -> dict[str, str]:
     vernacular_file = gbif_backbone / "VernacularName.tsv"
     if not vernacular_file.exists():
         return {}
@@ -618,7 +655,13 @@ def _load_english_common_names(gbif_backbone: Path, wanted_gbif_ids: set[str]) -
                 continue
 
             country_code = _cell(row, index["countryCode"]).upper()
-            score = _common_name_score(language, country_code)
+            rank = ranks_by_gbif_id.get(taxon_id, "")
+            score = _common_name_score(
+                name=name,
+                language=language,
+                country_code=country_code,
+                rank=rank,
+            )
             current = selected.get(taxon_id)
             if current is None or score > current[0]:
                 selected[taxon_id] = (score, name)
@@ -626,10 +669,30 @@ def _load_english_common_names(gbif_backbone: Path, wanted_gbif_ids: set[str]) -
     return {taxon_id: name for taxon_id, (_, name) in selected.items()}
 
 
-def _common_name_score(language: str, country_code: str) -> int:
-    language_score = 2 if language == "en" else 1
-    country_score = COMMON_NAME_COUNTRY_PRIORITY.get(country_code, 1)
-    return language_score * 10 + country_score
+def _common_name_score(*, name: str, language: str, country_code: str, rank: str) -> int:
+    language_score = 200 if language == "en" else 100
+    country_score = COMMON_NAME_COUNTRY_PRIORITY.get(country_code, 1) * 10
+    score = language_score + country_score
+
+    normalized_name = _normalize_common_name(name)
+    if normalized_name in COMMON_NAME_CATEGORY_TERMS:
+        score -= 100
+
+    if rank != "species" and _looks_plural_common_name(normalized_name):
+        score += 25
+
+    return score
+
+
+def _normalize_common_name(name: str) -> str:
+    return " ".join(name.casefold().replace("-", " ").split())
+
+
+def _looks_plural_common_name(normalized_name: str) -> bool:
+    if not normalized_name:
+        return False
+    last_word = normalized_name.rsplit(" ", maxsplit=1)[-1]
+    return last_word.endswith("s") and not last_word.endswith(("'s", "ss"))
 
 
 def _cell(row: list[str], index: int) -> str:
