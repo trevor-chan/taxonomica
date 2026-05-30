@@ -53,7 +53,6 @@ CATEGORY_MODIFIERS = {
     1: {
         "Mammalia",
         "Canidae",
-        "Carnivora",
         "Cetacea",
         "Felidae",
         "Primates",

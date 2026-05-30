@@ -18,9 +18,11 @@ try:
     from export_wikipedia_targets import title_from_wikipedia_url
     from extract_wikipedia_descriptions import (
         DEFAULT_CANDIDATE_DB,
+        DEFAULT_DESCRIPTION_CHAR_LIMIT,
         DEFAULT_INDEX,
         DEFAULT_XML_DUMP,
         ExtractedPage,
+        clean_wikitext_description,
         clean_wikitext_lead,
         parse_pages_from_stream,
         read_bzip2_stream_at,
@@ -29,9 +31,11 @@ except ModuleNotFoundError:
     from build_tree.export_wikipedia_targets import title_from_wikipedia_url
     from build_tree.extract_wikipedia_descriptions import (
         DEFAULT_CANDIDATE_DB,
+        DEFAULT_DESCRIPTION_CHAR_LIMIT,
         DEFAULT_INDEX,
         DEFAULT_XML_DUMP,
         ExtractedPage,
+        clean_wikitext_description,
         clean_wikitext_lead,
         parse_pages_from_stream,
         read_bzip2_stream_at,
@@ -172,13 +176,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--paragraphs",
         type=int,
         default=2,
-        help="Number of cleaned lead paragraphs to store",
+        help="Number of cleaned lead paragraphs to store when description-char-limit is disabled",
+    )
+    parser.add_argument(
+        "--description-char-limit",
+        type=int,
+        default=DEFAULT_DESCRIPTION_CHAR_LIMIT,
+        help="Maximum cleaned description characters to store; 0 stores cleaned lead paragraphs",
     )
     parser.add_argument(
         "--progress-interval",
         type=int,
         default=250000,
         help="Print progress every N rows during long scans",
+    )
+    parser.add_argument(
+        "--extraction-progress-interval",
+        type=int,
+        default=5000,
+        help="Print progress every N Wikipedia dump offsets during page extraction",
     )
     parser.add_argument(
         "--examples",
@@ -499,6 +515,37 @@ def create_output_database(
     return conn
 
 
+def temporary_output_path(output_path: Path) -> Path:
+    """Return the transient SQLite path used during full rebuilds."""
+    return output_path.with_name(f"{output_path.name}.tmp")
+
+
+def sqlite_sidecars(path: Path) -> tuple[Path, Path]:
+    """Return WAL-mode sidecar paths for a SQLite database path."""
+    return (
+        path.with_name(f"{path.name}-wal"),
+        path.with_name(f"{path.name}-shm"),
+    )
+
+
+def remove_sqlite_outputs(path: Path) -> None:
+    """Remove an incomplete generated SQLite database and its sidecars."""
+    for candidate in (path, *sqlite_sidecars(path)):
+        if candidate.exists():
+            candidate.unlink()
+
+
+def replace_output_database(temp_output: Path, output_path: Path, *, force: bool) -> None:
+    """Atomically publish a completed temporary SQLite database."""
+    if output_path.exists() and not force:
+        raise FileExistsError(f"{output_path} already exists; pass --force to rebuild")
+    for sidecar in sqlite_sidecars(output_path):
+        if sidecar.exists():
+            sidecar.unlink()
+    temp_output.replace(output_path)
+    remove_sqlite_outputs(temp_output)
+
+
 def write_resolved_targets(
     conn: sqlite3.Connection,
     resolved: Iterable[ResolvedTarget],
@@ -571,6 +618,7 @@ def extract_and_store_pages(
     popularity_metrics: dict[str, PopularityMetrics],
     max_redirects: int,
     paragraphs: int,
+    description_char_limit: int,
     progress_interval: int,
 ) -> None:
     """Extract matched pages and redirects, then write page/description rows."""
@@ -595,10 +643,16 @@ def extract_and_store_pages(
                 page = chunk_pages.get(title)
                 if page is None:
                     continue
-                page.description = clean_wikitext_lead(
-                    page.lead_wikitext,
-                    paragraphs=paragraphs,
-                )
+                if description_char_limit > 0:
+                    page.description = clean_wikitext_description(
+                        page.raw_wikitext,
+                        max_chars=description_char_limit,
+                    )
+                else:
+                    page.description = clean_wikitext_lead(
+                        page.lead_wikitext,
+                        paragraphs=paragraphs,
+                    )
                 pages_by_title[title] = page
             if progress_interval and offset_index % progress_interval == 0:
                 print(
@@ -907,10 +961,15 @@ def main() -> None:
         )
         return
 
+    if args.output.exists() and not args.force:
+        raise FileExistsError(f"{args.output} already exists; pass --force to rebuild")
+    temp_output = temporary_output_path(args.output)
+    remove_sqlite_outputs(temp_output)
+
     print("\nPass 4: Creating output database and writing resolved targets...")
     conn = create_output_database(
-        args.output,
-        force=args.force,
+        temp_output,
+        force=True,
         metadata={
             "dump_date": args.dump_date,
             "candidate_db": str(args.candidate_db),
@@ -921,6 +980,8 @@ def main() -> None:
             "matched_target_count": sum(1 for row in resolved if row.matched),
             "total_index_rows": total_index_rows,
             "total_index_offsets": total_index_offsets,
+            "description_char_limit": args.description_char_limit,
+            "lead_paragraphs": args.paragraphs,
         },
     )
     try:
@@ -936,11 +997,14 @@ def main() -> None:
             popularity_metrics=popularity_metrics,
             max_redirects=args.max_redirects,
             paragraphs=args.paragraphs,
-            progress_interval=max(1, args.progress_interval // 10),
+            description_char_limit=args.description_char_limit,
+            progress_interval=args.extraction_progress_interval,
         )
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     finally:
         conn.close()
 
+    replace_output_database(temp_output, args.output, force=args.force)
     print(f"\nWrote assembled description database: {args.output}")
 
 

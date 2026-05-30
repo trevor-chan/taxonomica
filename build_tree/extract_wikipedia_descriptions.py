@@ -46,6 +46,10 @@ DEFAULT_TARGET_PAGES = (
     / "wikipedia_targets"
     / f"enwiki-{DEFAULT_DUMP_DATE}-candidate-pages.jsonl"
 )
+DEFAULT_DESCRIPTION_CHAR_LIMIT = 1500
+DESCRIPTION_RAW_SCAN_MIN_CHARS = 10_000
+DESCRIPTION_RAW_SCAN_MULTIPLIER = 8
+DESCRIPTION_MIN_PLAIN_PROSE_MULTIPLIER = 2
 DEFAULT_SPOT_CHECK_TITLES = [
     "Aa achalensis",
     "Homo sapiens",
@@ -56,6 +60,7 @@ DEFAULT_SPOT_CHECK_TITLES = [
 
 
 HEADING_RE = re.compile(r"(?m)^==[^=].*?==\s*$")
+ANY_HEADING_RE = re.compile(r"(?m)^\s*=+\s*(.*?)\s*=+\s*$")
 COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 REF_BLOCK_RE = re.compile(r"<ref\b[^>/]*?>.*?</ref>", re.IGNORECASE | re.DOTALL)
 REF_SELF_CLOSING_RE = re.compile(r"<ref\b[^>]*/\s*>", re.IGNORECASE)
@@ -67,6 +72,16 @@ TABLE_RE = re.compile(r"\{\|.*?\|\}", re.DOTALL)
 TEMPLATE_RE = re.compile(r"\{\{")
 REDIRECT_RE = re.compile(r"(?im)^\s*#redirect\s*:?\s*\[\[([^\]]+)\]\]")
 DISPLAY_TITLE_RE = re.compile(r"(?is)\{\{\s*DISPLAYTITLE\s*:[^}]+\}\}")
+DESCRIPTION_STOP_HEADING_PATTERNS = (
+    "reference",
+    "external link",
+    "further reading",
+    "bibliograph",
+    "see also",
+    "citation",
+    "footnote",
+    "gallery",
+)
 
 
 @dataclass(frozen=True)
@@ -150,10 +165,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum description characters to print per page",
     )
     parser.add_argument(
+        "--description-char-limit",
+        type=int,
+        default=DEFAULT_DESCRIPTION_CHAR_LIMIT,
+        help="Maximum cleaned description characters to extract; 0 stores cleaned lead paragraphs",
+    )
+    parser.add_argument(
         "--paragraphs",
         type=int,
         default=2,
-        help="Number of cleaned lead paragraphs to keep",
+        help="Number of cleaned lead paragraphs to keep when description-char-limit is disabled",
     )
     parser.add_argument(
         "--max-redirects",
@@ -229,7 +250,7 @@ def parse_pages_from_stream(xml_bytes: bytes) -> dict[str, ExtractedPage]:
             redirect_title = redirect_match.group(1).split("|", 1)[0]
 
         lead_wikitext = extract_lead_wikitext(raw_wikitext)
-        description = clean_wikitext_lead(lead_wikitext)
+        description = clean_wikitext_description(raw_wikitext)
 
         pages[title] = ExtractedPage(
             title=title,
@@ -252,8 +273,84 @@ def extract_lead_wikitext(wikitext: str) -> str:
     return wikitext[: match.start()] if match else wikitext
 
 
+def clean_wikitext_description(
+    wikitext: str,
+    *,
+    max_chars: int | None = DEFAULT_DESCRIPTION_CHAR_LIMIT,
+) -> str:
+    """Clean article prose from the lead onward, capped for gameplay."""
+    char_limit = max_chars if max_chars and max_chars > 0 else None
+    body = _description_body_wikitext(wikitext, max_chars=char_limit)
+    return _clean_wikitext_prose(body, max_chars=char_limit)
+
+
 def clean_wikitext_lead(wikitext: str, *, paragraphs: int = 2) -> str:
     """Clean enough lead-section wikitext for description spot checks."""
+    return _clean_wikitext_prose(wikitext, paragraphs=paragraphs)
+
+
+def _description_body_wikitext(wikitext: str, *, max_chars: int | None = None) -> str:
+    """Return article wikitext up to housekeeping sections."""
+    lines = []
+    raw_limit = None
+    min_plain_prose = None
+    if max_chars is not None:
+        raw_limit = max(
+            DESCRIPTION_RAW_SCAN_MIN_CHARS,
+            max_chars * DESCRIPTION_RAW_SCAN_MULTIPLIER,
+        )
+        min_plain_prose = max_chars * DESCRIPTION_MIN_PLAIN_PROSE_MULTIPLIER
+
+    raw_chars = 0
+    plain_prose_chars = 0
+    template_depth = 0
+    table_depth = 0
+    for line in wikitext.splitlines():
+        if _is_description_stop_heading(line):
+            break
+        lines.append(line)
+        raw_chars += len(line) + 1
+        template_depth += line.count("{{") - line.count("}}")
+        table_depth += line.count("{|") - line.count("|}")
+        if _looks_like_plain_prose_line(line):
+            plain_prose_chars += len(line.strip())
+        if (
+            raw_limit is not None
+            and min_plain_prose is not None
+            and raw_chars >= raw_limit
+            and plain_prose_chars >= min_plain_prose
+            and template_depth <= 0
+            and table_depth <= 0
+        ):
+            break
+    return "\n".join(lines)
+
+
+def _is_description_stop_heading(line: str) -> bool:
+    match = ANY_HEADING_RE.match(line.strip())
+    if not match:
+        return False
+    heading = html.unescape(match.group(1))
+    normalized = re.sub(r"[^a-z]+", " ", heading.casefold()).strip()
+    return any(pattern in normalized for pattern in DESCRIPTION_STOP_HEADING_PATTERNS)
+
+
+def _looks_like_plain_prose_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if stripped.startswith(("*", "|", "!", "{", "}", "[[Category:", "=", "<")):
+        return False
+    return any(character.isalpha() for character in stripped)
+
+
+def _clean_wikitext_prose(
+    wikitext: str,
+    *,
+    paragraphs: int | None = None,
+    max_chars: int | None = None,
+) -> str:
+    """Clean wikitext into readable prose paragraphs."""
     redirect = REDIRECT_RE.search(wikitext)
     if redirect:
         return ""
@@ -270,6 +367,7 @@ def clean_wikitext_lead(wikitext: str, *, paragraphs: int = 2) -> str:
     text = EXTERNAL_LINK_RE.sub(r"\1", text)
     text = BARE_EXTERNAL_LINK_RE.sub("", text)
     text = HTML_TAG_RE.sub("", text)
+    text = ANY_HEADING_RE.sub("\n\n", text)
     text = text.replace("'''", "").replace("''", "")
     text = text.replace("&nbsp;", " ")
     text = re.sub(r"(?m)^\s*(\[\[Category:[^\]]+\]\]|\{\{DEFAULTSORT:[^}]+\}\})\s*$", "", text)
@@ -280,11 +378,56 @@ def clean_wikitext_lead(wikitext: str, *, paragraphs: int = 2) -> str:
         paragraph = _clean_paragraph(paragraph)
         if not paragraph:
             continue
+        if max_chars is not None:
+            current = "\n\n".join(cleaned_paragraphs)
+            separator_length = 2 if current else 0
+            remaining = max_chars - len(current) - separator_length
+            if remaining <= 0:
+                break
+            if len(paragraph) > remaining:
+                if remaining < min(80, max_chars):
+                    break
+                paragraph = _truncate_text(
+                    paragraph,
+                    remaining,
+                    allow_word_boundary=not cleaned_paragraphs,
+                )
+                if not paragraph:
+                    break
         cleaned_paragraphs.append(paragraph)
-        if len(cleaned_paragraphs) >= paragraphs:
+        if paragraphs is not None and len(cleaned_paragraphs) >= paragraphs:
             break
 
     return "\n\n".join(cleaned_paragraphs)
+
+
+def _truncate_text(
+    text: str,
+    max_chars: int,
+    *,
+    allow_word_boundary: bool = True,
+) -> str:
+    """Trim text near a natural boundary without adding synthetic prose."""
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 0:
+        return ""
+
+    sentence_end = max(
+        text.rfind(". ", 0, max_chars),
+        text.rfind("? ", 0, max_chars),
+        text.rfind("! ", 0, max_chars),
+    )
+    if sentence_end >= max_chars * 0.55:
+        return text[: sentence_end + 1].rstrip()
+
+    word_end = text.rfind(" ", 0, max_chars)
+    if allow_word_boundary and word_end >= max_chars * 0.55:
+        return text[:word_end].rstrip(" ,;:")
+
+    if allow_word_boundary:
+        return text[:max_chars].rstrip(" ,;:")
+    return ""
 
 
 def _replace_selected_templates(text: str) -> str:
@@ -450,6 +593,7 @@ def extract_pages(
     candidate_db: Path,
     paragraphs: int,
     max_redirects: int,
+    description_char_limit: int = DEFAULT_DESCRIPTION_CHAR_LIMIT,
 ) -> tuple[list[dict[str, object]], set[str]]:
     """Extract selected pages and return serializable records."""
     requested_title_set = set(titles)
@@ -478,10 +622,16 @@ def extract_pages(
             for title in titles_to_fetch:
                 if title in chunk_pages:
                     page = chunk_pages[title]
-                    page.description = clean_wikitext_lead(
-                        page.lead_wikitext,
-                        paragraphs=paragraphs,
-                    )
+                    if description_char_limit > 0:
+                        page.description = clean_wikitext_description(
+                            page.raw_wikitext,
+                            max_chars=description_char_limit,
+                        )
+                    else:
+                        page.description = clean_wikitext_lead(
+                            page.lead_wikitext,
+                            paragraphs=paragraphs,
+                        )
                     pages_by_title[title] = page
 
         redirect_targets = {
@@ -602,6 +752,7 @@ def main() -> None:
         titles=titles,
         candidate_db=args.candidate_db,
         paragraphs=args.paragraphs,
+        description_char_limit=args.description_char_limit,
         max_redirects=args.max_redirects,
     )
 

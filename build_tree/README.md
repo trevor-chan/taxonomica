@@ -58,6 +58,14 @@ Build the assembled description database:
 python build_tree/build_wikipedia_description_db.py --force
 ```
 
+By default this stores a cleaned gameplay excerpt of up to 1,500 characters
+from the article lead and following prose sections. Use
+`--description-char-limit` to tune that cap; pass `0` to fall back to the older
+lead-paragraph extraction.
+
+The builder writes to a temporary SQLite file first, then replaces the assembled
+database only after a successful run.
+
 The current default output is:
 
 ```text

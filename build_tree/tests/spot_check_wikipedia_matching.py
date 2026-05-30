@@ -20,6 +20,7 @@ try:
     from export_wikipedia_targets import title_from_wikipedia_url
     from extract_wikipedia_descriptions import (
         DEFAULT_CANDIDATE_DB,
+        DEFAULT_DESCRIPTION_CHAR_LIMIT,
         DEFAULT_INDEX,
         DEFAULT_XML_DUMP,
         extract_pages,
@@ -29,6 +30,7 @@ except ModuleNotFoundError:
     from build_tree.export_wikipedia_targets import title_from_wikipedia_url
     from build_tree.extract_wikipedia_descriptions import (
         DEFAULT_CANDIDATE_DB,
+        DEFAULT_DESCRIPTION_CHAR_LIMIT,
         DEFAULT_INDEX,
         DEFAULT_XML_DUMP,
         extract_pages,
@@ -128,7 +130,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--paragraphs",
         type=int,
         default=2,
-        help="Number of cleaned lead paragraphs to keep",
+        help="Number of cleaned lead paragraphs to keep when description-char-limit is disabled",
+    )
+    parser.add_argument(
+        "--description-char-limit",
+        type=int,
+        default=DEFAULT_DESCRIPTION_CHAR_LIMIT,
+        help="Maximum cleaned description characters to extract; 0 stores cleaned lead paragraphs",
     )
     parser.add_argument(
         "--max-redirects",
@@ -502,6 +510,7 @@ def main() -> None:
         candidate_db=args.candidate_db,
         paragraphs=args.paragraphs,
         max_redirects=args.max_redirects,
+        description_char_limit=args.description_char_limit,
     )
     print(f"  Extracted pages:       {len(records):,}")
     print(f"  Missing index titles:  {len(missing):,}")
