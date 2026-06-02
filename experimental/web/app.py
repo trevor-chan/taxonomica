@@ -184,8 +184,6 @@ class TerminalSession:
                 "  TAXONOMICA - Web Terminal",
                 "=" * 100,
                 "",
-                "  The browser is acting as a tiny terminal for the Python game.",
-                "  Type the same commands you would use in the console.",
                 "",
                 f"  Runtime DB: {self.data.db_path}",
                 (
