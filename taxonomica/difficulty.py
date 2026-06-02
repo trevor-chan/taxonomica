@@ -59,6 +59,7 @@ CATEGORY_MODIFIERS = {
     },
     -1: {
         "Plantae",
+        "Aves",
     },
     -2: {
         "Archaea",
