@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import sqlite3
 
 from taxonomica.game.selection import select_playable_species
@@ -92,6 +93,28 @@ def test_runtime_descriptions_include_parent_info_when_available(tmp_path):
     assert data.match_taxon_key("f-felidae") is None
     assert data.playable_species_count == 6
     assert data.target_species_count == 5
+
+
+def test_default_runtime_can_load_compressed_database_in_memory(tmp_path):
+    source_db_path = tmp_path / "runtime.sqlite"
+    _write_runtime_fixture(source_db_path)
+
+    game_dir = tmp_path / "assets" / "game"
+    game_dir.mkdir(parents=True)
+    compressed_db_path = game_dir / "taxonomica-runtime-20260101.sqlite.gz"
+    database_bytes = bytearray(source_db_path.read_bytes())
+    database_bytes[18] = 2
+    database_bytes[19] = 2
+    with gzip.open(compressed_db_path, "wb") as target:
+        target.write(database_bytes)
+    source_db_path.unlink()
+
+    data = RuntimeTaxonomyData.from_default(tmp_path, in_memory=True)
+
+    assert data.db_path == compressed_db_path
+    assert data.tree.find_by_id("s-panthera-leo") is not None
+    assert data.target_species_count == 5
+    assert not (tmp_path / "assets" / "generated" / "runtime").exists()
 
 
 def _write_runtime_fixture(db_path):

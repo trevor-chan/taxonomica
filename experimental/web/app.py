@@ -1,559 +1,638 @@
 #!/usr/bin/env python3
-"""Taxonomica Web - A taxonomy guessing game web interface.
+"""Bare-bones terminal-style web wrapper for Taxonomica.
 
-Run with:
+Run locally with:
     python experimental/web/app.py
 
 Then visit http://localhost:8080
 """
 
-import random
+from __future__ import annotations
+
+import io
+import os
+import re
+import secrets
+import socket
 import sys
+import time
+from collections.abc import Callable
+from contextlib import redirect_stdout
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
-from flask import Flask, render_template, request, jsonify, session
+from flask import Flask, jsonify, render_template, request
+from flask import session as browser_session
 
 # Add repository root to path for source checkouts.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
 
-from taxonomica.game.selection import get_seed_from_string
-from taxonomica.game.text import split_into_lines
-from taxonomica.game.titles import get_rank_title
-from taxonomica.gbif_backbone import GBIFBackbone
-from taxonomica.gbif_tree import GBIFTaxonomyTree, TaxonomyNode
-from taxonomica.popularity import PopularityIndex
-from taxonomica.redaction import Redactor, build_redaction_terms_from_node
-from taxonomica.wikipedia import WikipediaData
+from taxonomica.game.engine import TaxonomicaGame  # noqa: E402
+from taxonomica.game.selection import get_seed_from_string, select_playable_species  # noqa: E402
+from taxonomica.runtime_db import RuntimeTaxonomyData  # noqa: E402
+from taxonomica.taxonomy import TaxonNode  # noqa: E402
+from taxonomica.ui import wrap_text  # noqa: E402
 
 app = Flask(__name__)
-app.secret_key = 'taxonomica-secret-key-change-in-production'
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_SECURE'] = False  # Set True in production with HTTPS
+app.secret_key = os.environ.get("TAXONOMICA_SECRET_KEY", "taxonomica-terminal-dev-key")
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = False
 
-# Global data (loaded once at startup)
-tree: GBIFTaxonomyTree | None = None
-wiki: WikipediaData | None = None
-popularity_index: PopularityIndex | None = None
+application = app
 
-# Server-side cache for game descriptions (to avoid cookie size limits)
-# In production, use Redis or similar. This is fine for single-server development.
-game_descriptions: dict[str, list[str]] = {}
-
-# Difficulty thresholds
-DIFFICULTY_THRESHOLDS = {
-    "easy": 55,
-    "medium": 49,
-    "hard": 24,
-    "expert": 0,
+WEB_IN_MEMORY_DB = os.environ.get("TAXONOMICA_WEB_IN_MEMORY_DB", "1").lower() not in {
+    "0",
+    "false",
+    "no",
 }
 
-# Game ranks
-ALL_RANKS = ["kingdom", "phylum", "class", "order", "family", "genus", "species"]
+DIFFICULTY_CHOICES = {
+    "1": "easy",
+    "easy": "easy",
+    "e": "easy",
+    "2": "medium",
+    "medium": "medium",
+    "m": "medium",
+    "3": "hard",
+    "hard": "hard",
+    "h": "hard",
+    "4": "expert",
+    "expert": "expert",
+    "x": "expert",
+}
 
-def find_species_with_wikipedia(
-    difficulty: str = "expert",
-    seed: int | None = None,
-    max_attempts: int = 200,
-) -> tuple[TaxonomyNode, str] | None:
-    """Find a species that has a Wikipedia entry with description."""
-    global tree, wiki, popularity_index
-    
-    min_score = DIFFICULTY_THRESHOLDS.get(difficulty, 0)
-    
-    # Pre-filter by difficulty
-    candidate_names: set[str] | None = None
-    if difficulty != "expert" and popularity_index and min_score > 0:
-        candidate_names = set()
-        for metrics in popularity_index._by_id.values():
-            if metrics.popularity_score >= min_score and metrics.section_count >= 2:
-                candidate_names.add(metrics.scientific_name.lower())
-    
-    # Get species nodes
-    species_nodes = []
-    for node in tree._nodes_by_id.values():
-        if node.rank == "species" and node.has_complete_path():
-            if candidate_names is not None:
-                if node.name.lower() not in candidate_names:
-                    continue
-            species_nodes.append(node)
-    
-    if not species_nodes:
-        return None
-    
-    # Sort for deterministic ordering
-    species_nodes.sort(key=lambda n: n.id)
-    
-    # Create seeded random generator
-    rng = random.Random(seed) if seed is not None else random.Random()
-    rng.shuffle(species_nodes)
-    
-    # Find species with Wikipedia entry
-    for node in species_nodes[:max_attempts]:
-        wiki_species = wiki.match_gbif_taxon(node.name)
-        if wiki_species:
-            full_text = wiki_species.get_useful_text()
-            if full_text and len(full_text) > 400:
-                lines = split_into_lines(full_text)
-                if len(lines) >= 12:
-                    return node, full_text
-    
-    return None
+SESSION_TTL_SECONDS = 2 * 60 * 60
+ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+T = TypeVar("T")
+
+runtime_data: RuntimeTaxonomyData | None = None
+difficulty_data: dict[str, RuntimeTaxonomyData] = {}
+terminal_sessions: dict[str, TerminalSession] = {}
 
 
-def get_correct_path(node: TaxonomyNode) -> list[dict]:
-    """Get the correct path from root to this node."""
-    path = []
-    current = node
-    while current:
-        path.append({
-            'id': current.id,
-            'name': current.name,
-            'rank': current.rank,
-            'vernacular': current.vernacular_names[0] if current.vernacular_names else None,
-        })
-        current = current.parent
-    path.reverse()
-    return path
+def capture_output(func: Callable[..., T], *args: Any, **kwargs: Any) -> tuple[T, str]:
+    """Run a print-oriented function and return its result plus captured output."""
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        result = func(*args, **kwargs)
+    return result, clean_terminal_text(buffer.getvalue())
 
 
-def get_choices_at_node(node_id: str, target_rank: str) -> list[dict]:
-    """Get available choices at a node for a target rank."""
-    global tree
-    
-    node = tree._nodes_by_id.get(node_id)
-    if not node:
-        return []
-    
-    choices = []
-    for child in node.children.values():
-        if child.rank == target_rank and child.has_complete_path():
-            # For non-species levels, exclude leaf nodes
-            if target_rank != "species" and not child.children:
-                continue
-            choices.append({
-                'id': child.id,
-                'name': child.name,
-                'rank': child.rank,
-                'vernacular': child.vernacular_names[0] if child.vernacular_names else None,
-                'descendants': child.count_descendants(),
-            })
-    
-    # Sort by descendants (descending), then alphabetically
-    choices.sort(key=lambda c: (-c['descendants'], c['name'].lower()))
-    return choices
+def clean_terminal_text(text: str) -> str:
+    """Remove terminal control codes that do not belong in a plain HTML pre."""
+    return ANSI_RE.sub("", text).strip("\n")
 
 
-def get_node_info(node_id: str) -> dict | None:
-    """Get detailed info about a node."""
-    global tree, wiki
-    
-    node = tree._nodes_by_id.get(node_id)
-    if not node:
-        return None
-    
-    info = {
-        'id': node.id,
-        'name': node.name,
-        'rank': node.rank,
-        'vernacular': node.vernacular_names[0] if node.vernacular_names else None,
-        'descendants': node.count_descendants(),
-        'description': None,
-    }
-    
-    # Try to get Wikipedia description
-    wiki_entry = wiki.match_gbif_taxon(node.name)
-    if wiki_entry:
-        desc = wiki_entry.get_useful_text() or wiki_entry.get_abstract()
-        if desc:
-            info['description'] = desc[:3000]
-    
-    return info
+def join_sections(*sections: str | None) -> str:
+    return "\n".join(section for section in sections if section)
 
 
-@app.route('/')
-def index():
-    """Main game page."""
-    return render_template('index.html')
+def get_runtime_data() -> RuntimeTaxonomyData:
+    """Load the runtime database once per web process."""
+    global runtime_data
+    if runtime_data is None:
+        runtime_data = RuntimeTaxonomyData.from_default(
+            PROJECT_ROOT,
+            in_memory=WEB_IN_MEMORY_DB,
+        )
+    return runtime_data
 
 
-@app.route('/health')
-def health():
-    """Health check endpoint for debugging."""
-    return jsonify({
-        'status': 'ok',
-        'tree_loaded': tree is not None,
-        'wiki_loaded': wiki is not None,
-        'popularity_loaded': popularity_index is not None,
-    })
+def get_difficulty_data(difficulty: str) -> RuntimeTaxonomyData:
+    """Share difficulty-pruned runtime views across browser sessions."""
+    if difficulty not in difficulty_data:
+        difficulty_data[difficulty] = get_runtime_data().for_difficulty(difficulty)
+    return difficulty_data[difficulty]
 
 
-@app.route('/api/start', methods=['POST'])
-def start_game():
-    """Start a new game."""
-    global tree
-    
-    data = request.json or {}
-    difficulty = data.get('difficulty', 'medium')
-    seed_string = data.get('seed', '')
-    round_number = data.get('round', 1)
-    
-    # Calculate seed
-    if seed_string:
-        base_seed = get_seed_from_string(seed_string)
-        seed = base_seed + round_number
-    else:
-        seed = None
-    
-    # Find a species
-    result = find_species_with_wikipedia(difficulty, seed)
-    if not result:
-        return jsonify({'error': 'Could not find a species'}), 500
-    
-    target_node, description = result
-    
-    # Get correct path
-    correct_path = get_correct_path(target_node)
-    
-    # Build redaction terms
-    terms = build_redaction_terms_from_node(target_node)
-    redactor = Redactor(terms)
-    
-    # Split into lines for progressive reveal
-    lines = split_into_lines(description)
-    
-    # Clean up old game description if exists
-    old_game = session.get('game')
-    if old_game and 'game_id' in old_game:
-        old_game_id = old_game['game_id']
-        if old_game_id in game_descriptions:
-            del game_descriptions[old_game_id]
-    
-    # Generate a game ID for server-side storage
-    import uuid
-    game_id = str(uuid.uuid4())
-    
-    # Store description lines in server-side cache (not in cookie)
-    game_descriptions[game_id] = lines
-    
-    # Store game state in session (minimal data only)
-    session['game'] = {
-        'game_id': game_id,  # Reference to server-side cached description
-        'target_id': target_node.id,
-        'target_name': target_node.name,
-        'target_vernacular': (
-            target_node.vernacular_names[0] if target_node.vernacular_names else None
-        ),
-        'correct_path': correct_path,
-        # 'description_lines' moved to server-side cache
-        'total_lines': len(lines),
-        'difficulty': difficulty,
-        'seed_string': seed_string,
-        'round_number': round_number,
-        'current_node_id': tree.root.id,
-        'current_rank_index': 0,
-        'score': 0,
-        'guesses': 0,
-        'level_wrong_guesses': 0,
-        'visible_lines': 3,
-        'revealed_path': [],
-    }
-    
-    # Get initial choices
-    choices = get_choices_at_node(tree.root.id, ALL_RANKS[0])
-    
-    # Redact visible description
-    visible_text = "\n".join(lines[:3])
-    redacted_text = redactor.redact(visible_text)
-    
-    return jsonify({
-        'success': True,
-        'current_rank': ALL_RANKS[0],
-        'choices': choices,
-        'description': redacted_text,
-        'visible_lines': 3,
-        'total_lines': len(lines),
-        'score': 0,
-        'progress': f"0/{len(ALL_RANKS)}",
-        'difficulty': difficulty,
-        'seed_string': seed_string,
-        'round_number': round_number,
-        'guesses_left': 5,
-    })
+@dataclass
+class TerminalSession:
+    """A small request/response state machine that feels like the CLI."""
 
+    data: RuntimeTaxonomyData
+    screen: str = ""
+    prompt: str = ""
+    state: str = "seed"
+    seed_string: str | None = None
+    base_seed: int | None = None
+    difficulty: str = "medium"
+    round_number: int = 1
+    cumulative_score: int = 0
+    round_scores: list[tuple[int, str]] = field(default_factory=list)
+    active_data: RuntimeTaxonomyData | None = None
+    game: TaxonomicaGame | None = None
+    pause_next_state: str = "game"
+    round_finished: bool = False
+    updated_at: float = field(default_factory=time.time)
 
-def get_description_lines(game: dict) -> list[str]:
-    """Get description lines from server-side cache."""
-    game_id = game.get('game_id')
-    if game_id and game_id in game_descriptions:
-        return game_descriptions[game_id]
-    return []
+    def __post_init__(self) -> None:
+        self.reset()
 
+    def reset(self) -> None:
+        """Return to the first setup prompt."""
+        self.seed_string = None
+        self.base_seed = None
+        self.difficulty = "medium"
+        self.round_number = 1
+        self.cumulative_score = 0
+        self.round_scores.clear()
+        self.active_data = None
+        self.game = None
+        self.pause_next_state = "game"
+        self.round_finished = False
+        self.state = "seed"
+        self.screen = self._render_seed_prompt()
+        self.prompt = "  Seed (or press Enter to skip):"
 
-@app.route('/api/guess', methods=['POST'])
-def make_guess():
-    """Make a guess."""
-    global tree
-    
-    data = request.json or {}
-    choice_id = data.get('choice_id')
-    
-    game = session.get('game')
-    if not game:
-        return jsonify({'error': 'No active game'}), 400
-    
-    # Get description lines from server-side cache
-    description_lines = get_description_lines(game)
-    
-    # Get target node for redaction
-    target_node = tree._nodes_by_id.get(game['target_id'])
-    terms = build_redaction_terms_from_node(target_node)
-    redactor = Redactor(terms)
-    
-    # Find the correct answer
-    current_rank = ALL_RANKS[game['current_rank_index']]
-    correct_path = game['correct_path']
-    
-    # Find correct node at current rank
-    correct_id = None
-    for node in correct_path:
-        if node['rank'] == current_rank:
-            correct_id = node['id']
-            break
-    
-    game['guesses'] += 1
-    
-    # Check if correct
-    is_correct = (choice_id == correct_id)
-    
-    if is_correct:
-        # Advance to next level
-        game['current_rank_index'] += 1
-        game['level_wrong_guesses'] = 0
-        
-        # Reveal more lines (for both correct and incorrect answers)
-        game['visible_lines'] = min(game['visible_lines'] + 1, len(description_lines))
-        
-        # Update current node and revealed path
-        game['current_node_id'] = choice_id
-        chosen_node = tree._nodes_by_id.get(choice_id)
-        game['revealed_path'].append({
-            'name': chosen_node.name,
-            'rank': chosen_node.rank,
-            'vernacular': chosen_node.vernacular_names[0] if chosen_node.vernacular_names else None,
-        })
-        
-        # Check if game complete
-        if game['current_rank_index'] >= len(ALL_RANKS):
-            session['game'] = game
-            # Get rank title
-            target_node = tree._nodes_by_id.get(game['target_id'])
-            rank_title = get_rank_title(game['score'], target_node) if target_node else None
-            
-            return jsonify({
-                'correct': True,
-                'complete': True,
-                'target_name': game['target_name'],
-                'target_vernacular': game['target_vernacular'],
-                'score': game['score'],
-                'guesses': game['guesses'],
-                'correct_path': game['correct_path'],
-                'rank_title': rank_title,
-            })
-        
-        # Get next choices
-        next_rank = ALL_RANKS[game['current_rank_index']]
-        choices = get_choices_at_node(choice_id, next_rank)
-        
-        session['game'] = game
-        
-        # Redact description
-        visible_text = "\n".join(description_lines[:game['visible_lines']])
-        redacted_text = redactor.redact(visible_text)
-        
-        return jsonify({
-            'correct': True,
-            'complete': False,
-            'current_rank': next_rank,
-            'choices': choices,
-            'description': redacted_text,
-            'visible_lines': game['visible_lines'],
-            'total_lines': len(description_lines),
-            'score': game['score'],
-            'progress': f"{game['current_rank_index']}/{len(ALL_RANKS)}",
-            'revealed_path': game['revealed_path'],
-            'guesses_left': 5,  # Reset after correct guess
-        })
-    else:
-        # Wrong guess
-        game['score'] += 1
-        game['level_wrong_guesses'] += 1
-        
-        # Reveal more lines
-        game['visible_lines'] = min(game['visible_lines'] + 1, len(description_lines))
-        
-        # Check if guess cap reached (5 wrong per level)
-        if game['level_wrong_guesses'] >= 5:
-            # Apply penalty and auto-advance
-            game['score'] += 3
-            game['current_rank_index'] += 1
-            game['level_wrong_guesses'] = 0
-            
-            # Find and reveal correct answer
-            correct_node = tree._nodes_by_id.get(correct_id)
-            game['current_node_id'] = correct_id
-            game['revealed_path'].append({
-                'name': correct_node.name,
-                'rank': correct_node.rank,
-                'vernacular': (
-                    correct_node.vernacular_names[0] if correct_node.vernacular_names else None
+    def snapshot(self) -> dict[str, str]:
+        self.updated_at = time.time()
+        return {
+            "screen": self.screen,
+            "prompt": self.prompt,
+            "state": self.state,
+        }
+
+    def handle(self, command: str) -> dict[str, str]:
+        """Advance the terminal session by one submitted line."""
+        if self.state == "seed":
+            self._handle_seed(command)
+        elif self.state == "difficulty":
+            self._handle_difficulty(command)
+        elif self.state == "ready":
+            self._show_game()
+        elif self.state == "game":
+            self._handle_game_command(command)
+        elif self.state == "pause":
+            self._handle_pause()
+        elif self.state == "info":
+            self._show_game()
+        elif self.state == "victory":
+            self._show_post_round_prompt()
+        elif self.state == "post_round":
+            self._handle_post_round(command)
+        else:
+            self.reset()
+        return self.snapshot()
+
+    def _render_seed_prompt(self) -> str:
+        return "\n".join(
+            [
+                "=" * 100,
+                "  TAXONOMICA - Web Terminal",
+                "=" * 100,
+                "",
+                "  The browser is acting as a tiny terminal for the Python game.",
+                "  Type the same commands you would use in the console.",
+                "",
+                f"  Runtime DB: {self.data.db_path}",
+                (
+                    f"  Taxa: {len(self.data.tree._nodes_by_id) - 1:,} | "
+                    f"Species in full tree: {self.data.playable_species_count:,} | "
+                    f"Target species: {self.data.target_species_count:,}"
                 ),
-            })
-            
-            # Check if complete
-            if game['current_rank_index'] >= len(ALL_RANKS):
-                session['game'] = game
-                # Get rank title
-                target_node_for_title = tree._nodes_by_id.get(game['target_id'])
-                rank_title = (
-                    get_rank_title(game['score'], target_node_for_title)
-                    if target_node_for_title
-                    else None
+                "",
+                "-" * 60,
+                "  GAME SETUP",
+                "-" * 60,
+                "",
+                "  For competitive play, enter a seed word/phrase.",
+                "  Players with the same seed, difficulty, and round get the same species.",
+                "",
+                "  Leave blank for a random species.",
+            ]
+        )
+
+    def _handle_seed(self, command: str) -> None:
+        seed_input = command.strip()
+        if seed_input:
+            self.seed_string = seed_input
+            self.base_seed = get_seed_from_string(seed_input)
+        self.state = "difficulty"
+        self.screen = self._render_difficulty_prompt()
+        self.prompt = "  Enter choice (1-4):"
+
+    def _render_difficulty_prompt(self, invalid: bool = False) -> str:
+        lines = [
+            "=" * 40,
+            "  SELECT DIFFICULTY",
+            "=" * 40,
+            "",
+            "  (1) EASY",
+            "  (2) MEDIUM",
+            "  (3) HARD",
+            "  (4) EXPERT",
+            "",
+        ]
+        if self.seed_string:
+            lines.insert(0, f'  Using seed: "{self.seed_string}"')
+            lines.insert(1, "")
+        if invalid:
+            lines.append("  Invalid choice. Please enter 1, 2, 3, or 4.")
+        return "\n".join(lines)
+
+    def _handle_difficulty(self, command: str) -> None:
+        choice = command.strip().lower()
+        difficulty = DIFFICULTY_CHOICES.get(choice)
+        if difficulty is None:
+            self.screen = self._render_difficulty_prompt(invalid=True)
+            self.prompt = "  Enter choice (1-4):"
+            return
+        self.difficulty = difficulty
+        self._prepare_round()
+
+    def _prepare_round(self) -> None:
+        self.active_data = get_difficulty_data(self.difficulty)
+        self.round_finished = False
+        if self.base_seed is not None:
+            round_seed = self.base_seed + self.round_number
+            loading_line = f"  Round {self.round_number} - Loading..."
+        else:
+            round_seed = None
+            loading_line = "  Loading..."
+
+        result, selection_output = capture_output(
+            select_playable_species,
+            self.active_data,
+            seed=round_seed,
+            difficulty=self.difficulty,
+        )
+        if not result:
+            self.state = "error"
+            self.screen = join_sections(
+                loading_line,
+                selection_output,
+                "  ERROR: Could not find a species with Wikipedia entry.",
+                "  Press Enter to return to setup.",
+            )
+            self.prompt = "  Press Enter:"
+            return
+
+        target_node, description = result
+        self.game = TaxonomicaGame(
+            self.active_data.tree,
+            self.active_data,
+            target_node,
+            description,
+            difficulty=self.difficulty,
+            seed_string=self.seed_string,
+            round_number=self.round_number if self.seed_string else None,
+        )
+        self.state = "ready"
+        self.screen = join_sections(
+            loading_line,
+            selection_output,
+            f"  Playing with {self.active_data.playable_species_count:,} species.",
+            "",
+            "  Ready to play!",
+        )
+        self.prompt = "  Press Enter to start:"
+
+    def _show_game(self) -> None:
+        if self.game is None:
+            self.reset()
+            return
+        if self.game.is_complete():
+            self._show_victory()
+            return
+        _, output = capture_output(self.game.display)
+        self.state = "game"
+        self.screen = output
+        self.prompt = "  Your choice:"
+
+    def _handle_game_command(self, command: str) -> None:
+        if self.game is None:
+            self.reset()
+            return
+
+        choice_input = command.strip()
+        choices = self.game.get_choices()
+        if not choices:
+            self.screen = self._append_to_screen("  No valid choices available!")
+            self._show_victory()
+            return
+
+        if choice_input == "I":
+            self._show_taxon_info(self.game.current_node)
+            return
+
+        if len(choice_input) == 2 and choice_input[0] == "I":
+            current_rank = self.game.game_ranks[self.game.current_rank_index]
+            if current_rank == "species":
+                self._enter_pause(
+                    ["Info not available for species choices."],
+                    next_state="game",
+                    prompt="  Press Enter to continue:",
                 )
-                
-                return jsonify({
-                    'correct': False,
-                    'guess_cap': True,
-                    'complete': True,
-                    'correct_answer': {
-                        'name': correct_node.name,
-                        'vernacular': (
-                            correct_node.vernacular_names[0]
-                            if correct_node.vernacular_names
-                            else None
-                        ),
-                    },
-                    'target_name': game['target_name'],
-                    'target_vernacular': game['target_vernacular'],
-                    'score': game['score'],
-                    'guesses': game['guesses'],
-                    'correct_path': game['correct_path'],
-                    'rank_title': rank_title,
-                })
-            
-            # Get next choices
-            next_rank = ALL_RANKS[game['current_rank_index']]
-            choices = get_choices_at_node(correct_id, next_rank)
-            
-            session['game'] = game
-            
-            visible_text = "\n".join(description_lines[:game['visible_lines']])
-            redacted_text = redactor.redact(visible_text)
-            
-            return jsonify({
-                'correct': False,
-                'guess_cap': True,
-                'complete': False,
-                'correct_answer': {
-                    'name': correct_node.name,
-                    'vernacular': (
-                        correct_node.vernacular_names[0]
-                        if correct_node.vernacular_names
-                        else None
-                    ),
-                },
-                'current_rank': next_rank,
-                'choices': choices,
-                'description': redacted_text,
-                'visible_lines': game['visible_lines'],
-                'total_lines': len(description_lines),
-                'score': game['score'],
-                'progress': f"{game['current_rank_index']}/{len(ALL_RANKS)}",
-                'revealed_path': game['revealed_path'],
-                'guesses_left': 5,
-            })
-        
-        # Regular wrong guess
-        guesses_left = 5 - game['level_wrong_guesses']
-        
-        session['game'] = game
-        
-        visible_text = "\n".join(description_lines[:game['visible_lines']])
-        redacted_text = redactor.redact(visible_text)
-        
-        # Get current choices again
-        choices = get_choices_at_node(game['current_node_id'], current_rank)
-        
-        return jsonify({
-            'correct': False,
-            'guess_cap': False,
-            'description': redacted_text,
-            'visible_lines': game['visible_lines'],
-            'total_lines': len(description_lines),
-            'score': game['score'],
-            'guesses_left': guesses_left,
-            'choices': choices,
-        })
+                return
+
+            letter = choice_input[1].lower()
+            if "a" <= letter <= "z":
+                index = ord(letter) - ord("a")
+                absolute_index = (
+                    self.game.display_config.page * self.game.display_config.page_size + index
+                )
+                if 0 <= absolute_index < len(choices):
+                    self._show_taxon_info(choices[absolute_index])
+                    return
+
+            self._enter_pause(
+                ["Invalid info choice."],
+                next_state="game",
+                prompt="  Press Enter to continue:",
+            )
+            return
+
+        action, selected = self.game._handle_input(choice_input, choices)
+
+        if action == "quit":
+            lines = [f"Game ended. The species was: {self.game.target.name}"]
+            if self.game.target.vernacular_names:
+                lines.append(f"Common name: {self.game.target.vernacular_names[0]}")
+            self._enter_pause(lines, next_state="post_round", prompt="  Press Enter to continue:")
+            return
+
+        if action == "refresh":
+            self._show_game()
+            return
+
+        if action == "invalid":
+            self.screen = self._append_to_screen("  Invalid command.")
+            self.prompt = "  Your choice:"
+            return
+
+        if action == "select" and selected is not None:
+            self._handle_selection(selected)
+
+    def _handle_selection(self, selected: TaxonNode) -> None:
+        if self.game is None:
+            self.reset()
+            return
+
+        chunks_before = self.game.visible_chunks
+        correct = self.game.make_guess(selected)
+        new_chunks = self.game.visible_chunks - chunks_before
+        reveal_msg = ""
+        if new_chunks > 0:
+            chunk_word = self.game.chunk_name + ("s" if new_chunks > 1 else "")
+            reveal_msg = f" (+{new_chunks} new {chunk_word} revealed!)"
+
+        if correct:
+            lines = [f"Correct! {selected.name} is right!{reveal_msg}"]
+            if selected.vernacular_names:
+                lines.append(f"Common name: {selected.vernacular_names[0]}")
+            next_state = "victory" if self.game.is_complete() else "game"
+            self._enter_pause(lines, next_state=next_state, prompt="  Press Enter to continue:")
+            return
+
+        if self.game.is_at_guess_cap():
+            correct_node = self.game.apply_guess_cap_penalty()
+            answer = (
+                self.game._format_taxon_name(correct_node)
+                if correct_node is not None
+                else "unknown"
+            )
+            lines = [
+                f"Out of guesses for this level!{reveal_msg}",
+                f"The answer was: {answer}",
+                f"(+{self.game.GUESS_CAP_PENALTY} penalty, advancing to next level)",
+            ]
+            next_state = "victory" if self.game.is_complete() else "game"
+            self._enter_pause(lines, next_state=next_state, prompt="  Press Enter to continue:")
+            return
+
+        guesses_remaining = self.game.MAX_GUESSES_PER_LEVEL - self.game.level_wrong_guesses
+        self._enter_pause(
+            [
+                f"Wrong!{reveal_msg} ({guesses_remaining} guesses left)",
+                "(The correct answer is still among the choices)",
+            ],
+            next_state="game",
+            prompt="  Press Enter to try again:",
+        )
+
+    def _enter_pause(self, lines: list[str], next_state: str, prompt: str) -> None:
+        self.pause_next_state = next_state
+        self.state = "pause"
+        formatted = "\n".join(f"  {line}" for line in lines)
+        self.screen = self._append_to_screen(formatted)
+        self.prompt = prompt
+
+    def _handle_pause(self) -> None:
+        if self.pause_next_state == "victory":
+            self._show_victory()
+        elif self.pause_next_state == "post_round":
+            self._show_post_round_prompt()
+        else:
+            self._show_game()
+
+    def _show_taxon_info(self, node: TaxonNode) -> None:
+        if self.active_data is None:
+            self.reset()
+            return
+
+        lines = [
+            "=" * 100,
+            f"  INFORMATION: {node.name}",
+            "=" * 100,
+            "",
+        ]
+        if node.vernacular_names:
+            lines.append(f"  Common name: {node.vernacular_names[0]}")
+        lines.extend(
+            [
+                f"  Rank: {node.rank}",
+                f"  Descendants: {node.count_descendants():,}",
+            ]
+        )
+
+        description_entry = self.active_data.match_taxon_key(node.id)
+        if description_entry and description_entry.description:
+            lines.extend(
+                [
+                    "",
+                    "-" * 100,
+                    "  WIKIPEDIA DESCRIPTION:",
+                    "-" * 100,
+                    wrap_text(description_entry.description[:3000], width=94),
+                ]
+            )
+            if len(description_entry.description) > 3000:
+                remaining = len(description_entry.description) - 3000
+                lines.append(f"\n  ... and {remaining:,} more characters ...")
+            lines.append("-" * 100)
+        else:
+            lines.extend(["", "  (No Wikipedia entry found for this taxon)"])
+
+        lines.extend(["", "=" * 100])
+        self.state = "info"
+        self.screen = "\n".join(lines)
+        self.prompt = "  Press Enter to return to the game:"
+
+    def _show_victory(self) -> None:
+        if self.game is None:
+            self.reset()
+            return
+        self._finish_round_once()
+        _, output = capture_output(self.game.display_victory)
+        self.state = "victory"
+        self.screen = output
+        self.prompt = "  Press Enter to exit:"
+
+    def _finish_round_once(self) -> None:
+        if self.round_finished or self.game is None:
+            return
+        self.round_finished = True
+        if self.seed_string:
+            self.round_scores.append((self.game.score, self.game.target.name))
+            self.cumulative_score += self.game.score
+
+    def _show_post_round_prompt(self) -> None:
+        self._finish_round_once()
+        lines = ["=" * 100]
+        if self.seed_string:
+            lines.extend(
+                [
+                    f"  CUMULATIVE SCORE after {self.round_number} round(s): "
+                    f"{self.cumulative_score}",
+                    "-" * 100,
+                ]
+            )
+        lines.append("  Play again? (y/n)")
+        self.state = "post_round"
+        self.screen = "\n".join(lines)
+        self.prompt = "  Play again? (y/n):"
+
+    def _handle_post_round(self, command: str) -> None:
+        if command.strip().lower() == "y":
+            self.round_number += 1
+            self._prepare_round()
+            return
+
+        lines = []
+        if self.seed_string and len(self.round_scores) > 1:
+            lines.extend(
+                [
+                    "=" * 60,
+                    "  FINAL SESSION SUMMARY",
+                    f'     Seed: "{self.seed_string}" | Difficulty: {self.difficulty.upper()}',
+                    "=" * 60,
+                ]
+            )
+            for index, (score, species) in enumerate(self.round_scores, 1):
+                lines.append(f"  Round {index}: {score:3d} pts - {species}")
+            average = self.cumulative_score / len(self.round_scores)
+            lines.extend(
+                [
+                    "-" * 60,
+                    f"  TOTAL: {self.cumulative_score} points across "
+                    f"{len(self.round_scores)} rounds",
+                    f"  AVERAGE: {average:.1f} points per round",
+                    "=" * 60,
+                    "",
+                ]
+            )
+        lines.extend(
+            [
+                "  Thanks for playing Taxonomica!",
+                "",
+                "  Press Enter to start over.",
+            ]
+        )
+        self.state = "ended"
+        self.screen = "\n".join(lines)
+        self.prompt = "  Press Enter:"
+
+    def _append_to_screen(self, text: str) -> str:
+        return join_sections(self.screen, "", text)
 
 
-@app.route('/api/info/<node_id>')
-def node_info(node_id: str):
-    """Get info about a node."""
-    info = get_node_info(node_id)
-    if not info:
-        return jsonify({'error': 'Node not found'}), 404
-    return jsonify(info)
+def prune_terminal_sessions() -> None:
+    now = time.time()
+    expired_ids = [
+        session_id
+        for session_id, terminal_session in terminal_sessions.items()
+        if now - terminal_session.updated_at > SESSION_TTL_SECONDS
+    ]
+    for session_id in expired_ids:
+        del terminal_sessions[session_id]
 
 
-@app.route('/api/current_info')
-def current_node_info():
-    """Get info about the current node."""
-    game = session.get('game')
-    if not game:
-        return jsonify({'error': 'No active game'}), 400
-    
-    info = get_node_info(game['current_node_id'])
-    if not info:
-        return jsonify({'error': 'Node not found'}), 404
-    return jsonify(info)
+def current_terminal_session() -> TerminalSession:
+    prune_terminal_sessions()
+    session_id = browser_session.get("terminal_session_id")
+    if not session_id or session_id not in terminal_sessions:
+        session_id = secrets.token_urlsafe(16)
+        browser_session["terminal_session_id"] = session_id
+        terminal_sessions[session_id] = TerminalSession(get_runtime_data())
+    return terminal_sessions[session_id]
 
 
-def load_data():
-    """Load taxonomy data at startup."""
-    global tree, wiki, popularity_index
-    
-    base_path = Path(__file__).resolve().parents[2]
-    backbone_path = base_path / "assets" / "raw" / "gbif-backbone"
-    wiki_path = base_path / "assets" / "raw" / "wikipedia-dwca"
-    
-    print("Loading GBIF Backbone Taxonomy...")
-    backbone = GBIFBackbone(backbone_path)
-    tree = GBIFTaxonomyTree.from_backbone(backbone, accepted_only=True)
-    
-    print("Loading vernacular names...")
-    tree.add_vernacular_names(backbone)
-    
-    print("Loading Wikipedia data...")
-    wiki = WikipediaData(wiki_path)
-    
-    print("Building popularity index...")
-    popularity_index = PopularityIndex.from_wikipedia_dwca(wiki_path)
-    
-    print("Data loaded!")
+@app.route("/")
+def index() -> str:
+    return render_template("index.html")
 
 
-if __name__ == '__main__':
+@app.route("/health")
+def health() -> Any:
+    return jsonify(
+        {
+            "status": "ok",
+            "runtime_loaded": runtime_data is not None,
+            "runtime_db_mode": "in-memory" if WEB_IN_MEMORY_DB else "disk",
+            "runtime_db_path": str(runtime_data.db_path) if runtime_data is not None else None,
+            "difficulty_views_loaded": sorted(difficulty_data),
+            "active_terminal_sessions": len(terminal_sessions),
+        }
+    )
+
+
+@app.route("/api/session")
+def session_snapshot() -> Any:
+    return jsonify(current_terminal_session().snapshot())
+
+
+@app.route("/api/command", methods=["POST"])
+def command() -> Any:
+    data = request.get_json(silent=True) or {}
+    command_text = str(data.get("command", ""))
+    return jsonify(current_terminal_session().handle(command_text))
+
+
+@app.route("/api/reset", methods=["POST"])
+def reset() -> Any:
+    terminal_session = current_terminal_session()
+    terminal_session.reset()
+    return jsonify(terminal_session.snapshot())
+
+
+def find_available_port(host: str, preferred_port: int, attempts: int = 20) -> int:
+    """Return the preferred port, or the next open port after it."""
+    for port in range(preferred_port, preferred_port + attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind((host, port))
+            except OSError:
+                continue
+            return port
+    raise OSError(f"No open port found from {preferred_port} to {preferred_port + attempts - 1}")
+
+
+if __name__ == "__main__":
+    host = os.environ.get("TAXONOMICA_WEB_HOST", "127.0.0.1")
+    preferred_port = int(os.environ.get("TAXONOMICA_WEB_PORT", "8080"))
+    port = find_available_port(host, preferred_port)
+
     print("\n" + "=" * 50)
-    print("Starting Taxonomica Web Server...")
+    print("Starting Taxonomica Web Terminal...")
+    print("=" * 50)
+    if port != preferred_port:
+        print(f"Port {preferred_port} is busy; using {port} instead.")
+    print(f"Runtime DB mode: {'in-memory' if WEB_IN_MEMORY_DB else 'disk'}")
+    print(f"Visit: http://{host}:{port}")
+    print(f"Health check: http://{host}:{port}/health")
     print("=" * 50 + "\n")
-    
-    load_data()
-    
-    print("\n" + "=" * 50)
-    print("Server ready!")
-    print("Visit: http://127.0.0.1:8080")
-    print("Health check: http://127.0.0.1:8080/health")
-    print("=" * 50 + "\n")
-    
-    app.run(debug=True, port=8080, host='127.0.0.1')
+    app.run(debug=True, port=port, host=host, use_reloader=False)

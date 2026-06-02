@@ -16,9 +16,12 @@ from taxonomica.difficulty import (
 )
 from taxonomica.taxonomy import TaxonNode, TaxonomyTree
 
-
 RUNTIME_DB_GLOB = "taxonomica-runtime-*.sqlite"
 COMPRESSED_RUNTIME_DB_GLOB = "taxonomica-runtime-*.sqlite.gz"
+SQLITE_HEADER = b"SQLite format 3\x00"
+SQLITE_HEADER_WRITE_VERSION_OFFSET = 18
+SQLITE_HEADER_READ_VERSION_OFFSET = 19
+SQLITE_ROLLBACK_JOURNAL_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -83,123 +86,158 @@ class RuntimeTaxonomyData:
         )
 
     @classmethod
-    def from_default(cls, project_root: Path | None = None) -> RuntimeTaxonomyData:
-        """Load the default runtime database under ``assets/game``."""
+    def from_default(
+        cls,
+        project_root: Path | None = None,
+        *,
+        in_memory: bool = False,
+    ) -> RuntimeTaxonomyData:
+        """Load the default runtime database under ``assets/game``.
+
+        If ``in_memory`` is true and only a compressed runtime DB is available,
+        inflate it into an in-memory SQLite database instead of writing a
+        decompressed copy under ``assets/generated/runtime``.
+        """
         root = project_root or Path.cwd()
+        if in_memory:
+            compressed_path = resolve_compressed_runtime_db_path(root)
+            if compressed_path is not None:
+                return cls.from_compressed_sqlite_in_memory(compressed_path)
         return cls.from_sqlite(resolve_runtime_db_path(root))
 
     @classmethod
     def from_sqlite(cls, db_path: str | Path) -> RuntimeTaxonomyData:
         """Load a runtime SQLite database."""
         path = Path(db_path)
+        with sqlite3.connect(path) as conn:
+            return cls._from_sqlite_connection(conn, path)
+
+    @classmethod
+    def from_compressed_sqlite_in_memory(cls, db_path: str | Path) -> RuntimeTaxonomyData:
+        """Load a gzipped runtime SQLite database without writing it to disk."""
+        path = Path(db_path)
+        with gzip.open(path, "rb") as source:
+            database_bytes = _prepare_sqlite_bytes_for_deserialize(source.read())
+        with sqlite3.connect(":memory:") as conn:
+            conn.deserialize(database_bytes)
+            return cls._from_sqlite_connection(conn, path)
+
+    @classmethod
+    def _from_sqlite_connection(
+        cls,
+        conn: sqlite3.Connection,
+        db_path: Path,
+    ) -> RuntimeTaxonomyData:
+        """Load runtime data from an open SQLite connection."""
+        path = Path(db_path)
         tree = TaxonomyTree()
         descriptions_by_key: dict[str, RuntimeDescription] = {}
         descriptions_by_name: dict[str, RuntimeDescription] = {}
 
-        with sqlite3.connect(path) as conn:
-            conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA temp_store = MEMORY")
+        conn.row_factory = sqlite3.Row
 
-            for row in conn.execute(
-                """
-                SELECT
-                    taxon_key,
-                    rank,
-                    scientific_name,
-                    common_name,
-                    difficulty_level,
-                    description_length,
-                    article_length,
-                    pageview_count,
-                    difficulty_score,
-                    pageview_score,
-                    article_score,
-                    vernacular_score,
-                    category_score,
-                    category_modifier,
-                    target_rank,
-                    tree_rank,
-                    playable_species_count,
-                    tree_species_count,
-                    easy_species_count,
-                    medium_species_count,
-                    hard_species_count,
-                    expert_target_species_count
-                FROM runtime_taxa
-                ORDER BY length(taxon_key), taxon_key
-                """
-            ):
-                if row["taxon_key"] == tree.root.id:
-                    continue
-                common_name = row["common_name"]
-                vernacular_names = [common_name] if common_name else []
-                node = TaxonNode(
-                    id=row["taxon_key"],
-                    name=row["scientific_name"],
-                    rank=row["rank"],
-                    scientific_name=row["scientific_name"],
-                    vernacular_names=vernacular_names,
-                    playable_species_count=row["playable_species_count"],
-                    tree_species_count=row["tree_species_count"],
-                    easy_species_count=row["easy_species_count"],
-                    medium_species_count=row["medium_species_count"],
-                    hard_species_count=row["hard_species_count"],
-                    expert_target_species_count=row["expert_target_species_count"],
-                    target_difficulty=row["difficulty_level"],
-                    description_length=row["description_length"],
-                    article_length=row["article_length"],
-                    pageview_count=row["pageview_count"],
-                    difficulty_score=row["difficulty_score"],
-                    pageview_score=row["pageview_score"],
-                    article_score=row["article_score"],
-                    vernacular_score=row["vernacular_score"],
-                    category_score=row["category_score"],
-                    category_modifier=row["category_modifier"],
-                    target_rank=row["target_rank"],
-                    tree_rank=row["tree_rank"],
-                )
-                tree._register_node(node)
+        for row in conn.execute(
+            """
+            SELECT
+                taxon_key,
+                rank,
+                scientific_name,
+                common_name,
+                difficulty_level,
+                description_length,
+                article_length,
+                pageview_count,
+                difficulty_score,
+                pageview_score,
+                article_score,
+                vernacular_score,
+                category_score,
+                category_modifier,
+                target_rank,
+                tree_rank,
+                playable_species_count,
+                tree_species_count,
+                easy_species_count,
+                medium_species_count,
+                hard_species_count,
+                expert_target_species_count
+            FROM runtime_taxa
+            ORDER BY length(taxon_key), taxon_key
+            """
+        ):
+            if row["taxon_key"] == tree.root.id:
+                continue
+            common_name = row["common_name"]
+            vernacular_names = [common_name] if common_name else []
+            node = TaxonNode(
+                id=row["taxon_key"],
+                name=row["scientific_name"],
+                rank=row["rank"],
+                scientific_name=row["scientific_name"],
+                vernacular_names=vernacular_names,
+                playable_species_count=row["playable_species_count"],
+                tree_species_count=row["tree_species_count"],
+                easy_species_count=row["easy_species_count"],
+                medium_species_count=row["medium_species_count"],
+                hard_species_count=row["hard_species_count"],
+                expert_target_species_count=row["expert_target_species_count"],
+                target_difficulty=row["difficulty_level"],
+                description_length=row["description_length"],
+                article_length=row["article_length"],
+                pageview_count=row["pageview_count"],
+                difficulty_score=row["difficulty_score"],
+                pageview_score=row["pageview_score"],
+                article_score=row["article_score"],
+                vernacular_score=row["vernacular_score"],
+                category_score=row["category_score"],
+                category_modifier=row["category_modifier"],
+                target_rank=row["target_rank"],
+                tree_rank=row["tree_rank"],
+            )
+            tree._register_node(node)
 
-            for row in conn.execute(
-                """
-                SELECT parent_key, child_key
-                FROM runtime_edges
-                ORDER BY parent_key, child_key
-                """
-            ):
-                parent = tree.find_by_id(row["parent_key"])
-                child = tree.find_by_id(row["child_key"])
-                if parent is not None and child is not None:
-                    parent.add_child(child)
+        for row in conn.execute(
+            """
+            SELECT parent_key, child_key
+            FROM runtime_edges
+            ORDER BY parent_key, child_key
+            """
+        ):
+            parent = tree.find_by_id(row["parent_key"])
+            child = tree.find_by_id(row["child_key"])
+            if parent is not None and child is not None:
+                parent.add_child(child)
 
-            for row in conn.execute(
-                """
-                SELECT
-                    d.taxon_key,
-                    t.scientific_name,
-                    d.title,
-                    d.description,
-                    d.word_count,
-                    d.description_length,
-                    d.multimedia_count,
-                    d.pageview_count,
-                    d.backlink_count
-                FROM runtime_descriptions d
-                JOIN runtime_taxa t ON t.taxon_key = d.taxon_key
-                """
-            ):
-                description = RuntimeDescription(
-                    taxon_key=row["taxon_key"],
-                    scientific_name=row["scientific_name"],
-                    title=row["title"],
-                    description=row["description"],
-                    word_count=row["word_count"],
-                    description_length=row["description_length"],
-                    multimedia_count=row["multimedia_count"],
-                    pageview_count=row["pageview_count"] or 0,
-                    backlink_count=row["backlink_count"] or 0,
-                )
-                descriptions_by_key[row["taxon_key"]] = description
-                descriptions_by_name.setdefault(row["scientific_name"].lower(), description)
+        for row in conn.execute(
+            """
+            SELECT
+                d.taxon_key,
+                t.scientific_name,
+                d.title,
+                d.description,
+                d.word_count,
+                d.description_length,
+                d.multimedia_count,
+                d.pageview_count,
+                d.backlink_count
+            FROM runtime_descriptions d
+            JOIN runtime_taxa t ON t.taxon_key = d.taxon_key
+            """
+        ):
+            description = RuntimeDescription(
+                taxon_key=row["taxon_key"],
+                scientific_name=row["scientific_name"],
+                title=row["title"],
+                description=row["description"],
+                word_count=row["word_count"],
+                description_length=row["description_length"],
+                multimedia_count=row["multimedia_count"],
+                pageview_count=row["pageview_count"] or 0,
+                backlink_count=row["backlink_count"] or 0,
+            )
+            descriptions_by_key[row["taxon_key"]] = description
+            descriptions_by_name.setdefault(row["scientific_name"].lower(), description)
 
         tree.root.tree_species_count = sum(
             child.tree_species_count for child in tree.root.children.values()
@@ -336,6 +374,30 @@ class RuntimeTaxonomyData:
         return self._descriptions_by_key.get(taxon_key)
 
 
+def _prepare_sqlite_bytes_for_deserialize(database_bytes: bytes) -> bytes | bytearray:
+    """Return SQLite bytes suitable for ``Connection.deserialize``.
+
+    Packaged runtime databases may have WAL-mode header bytes. Deserializing a
+    WAL-mode image into ``:memory:`` can make SQLite look for a sidecar WAL file,
+    so normalize the in-memory copy to rollback-journal mode before loading.
+    """
+    if (
+        len(database_bytes) > SQLITE_HEADER_READ_VERSION_OFFSET
+        and database_bytes.startswith(SQLITE_HEADER)
+        and (
+            database_bytes[SQLITE_HEADER_WRITE_VERSION_OFFSET]
+            != SQLITE_ROLLBACK_JOURNAL_VERSION
+            or database_bytes[SQLITE_HEADER_READ_VERSION_OFFSET]
+            != SQLITE_ROLLBACK_JOURNAL_VERSION
+        )
+    ):
+        normalized_bytes = bytearray(database_bytes)
+        normalized_bytes[SQLITE_HEADER_WRITE_VERSION_OFFSET] = SQLITE_ROLLBACK_JOURNAL_VERSION
+        normalized_bytes[SQLITE_HEADER_READ_VERSION_OFFSET] = SQLITE_ROLLBACK_JOURNAL_VERSION
+        return normalized_bytes
+    return database_bytes
+
+
 def _node_species_count(node: TaxonNode, count_field: str) -> int:
     return int(getattr(node, count_field))
 
@@ -392,7 +454,15 @@ def resolve_runtime_db_path(project_root: Path) -> Path:
     runtime_dir.mkdir(parents=True, exist_ok=True)
     output_path = runtime_dir / compressed_path.name.removesuffix(".gz")
     if not output_path.exists() or compressed_path.stat().st_mtime > output_path.stat().st_mtime:
-        with gzip.open(compressed_path, "rb") as source:
-            with open(output_path, "wb") as target:
-                shutil.copyfileobj(source, target)
+        with gzip.open(compressed_path, "rb") as source, open(output_path, "wb") as target:
+            shutil.copyfileobj(source, target)
     return output_path
+
+
+def resolve_compressed_runtime_db_path(project_root: Path) -> Path | None:
+    """Return the newest packaged compressed runtime DB, if one exists."""
+    game_dir = project_root / "assets" / "game"
+    compressed_candidates = sorted(game_dir.glob(COMPRESSED_RUNTIME_DB_GLOB), reverse=True)
+    if compressed_candidates:
+        return compressed_candidates[0]
+    return None
