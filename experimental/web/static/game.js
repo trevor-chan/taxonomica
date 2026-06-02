@@ -4,6 +4,40 @@ const inputEl = document.getElementById("terminal-input");
 const formEl = document.getElementById("terminal-form");
 const resetButton = document.getElementById("reset-button");
 
+const PALETTE_STORAGE_KEY = "taxonomica-terminal-palette";
+const PALETTES = [
+    "classic-green",
+    "desert",
+    "meadow",
+    "reef",
+    "deep-sea",
+    "arctic",
+    "volcano",
+    "autumn-forest",
+];
+
+function selectPalette() {
+    let storedPalette = null;
+    try {
+        storedPalette = sessionStorage.getItem(PALETTE_STORAGE_KEY);
+    } catch {
+        storedPalette = null;
+    }
+
+    if (PALETTES.includes(storedPalette)) {
+        document.documentElement.dataset.palette = storedPalette;
+        return;
+    }
+
+    const palette = PALETTES[Math.floor(Math.random() * PALETTES.length)];
+    try {
+        sessionStorage.setItem(PALETTE_STORAGE_KEY, palette);
+    } catch {
+        // A blocked sessionStorage should not keep the terminal from loading.
+    }
+    document.documentElement.dataset.palette = palette;
+}
+
 function renderTerminal(data) {
     screenEl.textContent = data.screen || "";
     promptEl.textContent = data.prompt || ">";
@@ -85,4 +119,5 @@ document.addEventListener("click", () => {
     inputEl.focus();
 });
 
+selectPalette();
 loadSession();
