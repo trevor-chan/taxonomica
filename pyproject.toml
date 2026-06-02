@@ -23,7 +23,9 @@ classifiers = [
     "Topic :: Games/Entertainment",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
-dependencies = []
+dependencies = [
+    "flask>=3.0",
+]
 
 [project.scripts]
 taxonomica = "taxonomica.game.cli:main"
