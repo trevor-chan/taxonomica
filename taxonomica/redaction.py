@@ -74,7 +74,14 @@ VERNACULAR_MAPPINGS: dict[str, list[str]] = {
     "Lagomorpha": ["rabbit", "rabbits", "hare", "hares"],
     "Squamata": ["lizard", "lizards", "snake", "snakes"],
     "Testudines": ["turtle", "turtles", "tortoise", "tortoises"],
-    "Crocodilia": ["crocodile", "crocodiles", "alligator", "alligators", "crocodilian", "crocodilians"],
+    "Crocodilia": [
+        "crocodile",
+        "crocodiles",
+        "alligator",
+        "alligators",
+        "crocodilian",
+        "crocodilians",
+    ],
     "Passeriformes": ["songbird", "songbirds", "passerine", "passerines"],
     "Coleoptera": ["beetle", "beetles"],
     "Lepidoptera": ["butterfly", "butterflies", "moth", "moths"],
@@ -131,6 +138,25 @@ class RedactionTerms:
         return terms
 
 
+def _vernacular_variants(term: str) -> set[str]:
+    """Return simple redaction variants for a vernacular term."""
+    variants = {term, term.lower()}
+    if term.endswith("s"):
+        singular = term[:-1]
+        variants.add(singular)
+        variants.add(singular.lower())
+    return {variant for variant in variants if len(variant) > 2}
+
+
+def _add_vernacular_term(terms: RedactionTerms, rank: str, term: str) -> None:
+    """Add a vernacular term plus simple plural/singular variants."""
+    for variant in _vernacular_variants(term):
+        terms.add_term(rank, variant)
+    for part in term.split():
+        for variant in _vernacular_variants(part):
+            terms.add_term(rank, variant)
+
+
 def build_redaction_terms_from_node(node: TaxonNode) -> RedactionTerms:
     """Build redaction terms from a taxonomy node.
     
@@ -170,23 +196,12 @@ def build_redaction_terms_from_node(node: TaxonNode) -> RedactionTerms:
         # Add vernacular names from GBIF data
         if hasattr(ancestor, 'vernacular_names') and ancestor.vernacular_names:
             for vn in ancestor.vernacular_names:
-                terms.add_term(rank, vn)
-                # Also add lowercase version
-                terms.add_term(rank, vn.lower())
-                # Split into component words
-                for part in vn.split():
-                    if len(part) > 2:
-                        terms.add_term(rank, part)
-                        terms.add_term(rank, part.lower())
+                _add_vernacular_term(terms, rank, vn)
         
         # Add common vernacular mappings
         if name in VERNACULAR_MAPPINGS:
             for vn in VERNACULAR_MAPPINGS[name]:
-                terms.add_term(rank, vn)
-                # Split into component words
-                for part in vn.split():
-                    if len(part) > 2:
-                        terms.add_term(rank, part)
+                _add_vernacular_term(terms, rank, vn)
     
     return terms
 
@@ -233,12 +248,7 @@ def build_redaction_terms_manual(
     if vernacular_names:
         for rank, names in vernacular_names.items():
             for name in names:
-                terms.add_term(rank, name)
-                # Split into component words
-                for part in name.split():
-                    if len(part) > 2:
-                        terms.add_term(rank, part)
-                        terms.add_term(rank, part.lower())
+                _add_vernacular_term(terms, rank, name)
     
     return terms
 
