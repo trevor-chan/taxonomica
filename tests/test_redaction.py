@@ -34,3 +34,16 @@ def test_plural_vernacular_phrase_adds_s_stripped_component():
     assert redactor.redact("The eastern chipmunk has cheek pouches.") == (
         "The █████ has cheek pouches."
     )
+
+
+def test_hyphenated_vernacular_name_adds_component_terms():
+    terms = build_redaction_terms_manual(
+        {"species": "Olea sinensis"},
+        {"species": ["china-olive"]},
+    )
+    redactor = Redactor(terms)
+
+    assert {"china-olive", "china", "olive"}.issubset(terms.get_all_terms())
+    assert redactor.redact("The china-olive is also called china olive.") == (
+        "The █████ is also called █████ █████."
+    )

@@ -149,11 +149,13 @@ def _vernacular_variants(term: str) -> set[str]:
 
 
 def _add_vernacular_term(terms: RedactionTerms, rank: str, term: str) -> None:
-    """Add a vernacular term plus simple plural/singular variants."""
-    for variant in _vernacular_variants(term):
-        terms.add_term(rank, variant)
-    for part in term.split():
-        for variant in _vernacular_variants(part):
+    """Add a vernacular term plus simple plural/singular and hyphen variants."""
+    candidates = {term}
+    candidates.update(term.split())
+    candidates.update(part for part in re.split(r"[\s-]+", term) if part)
+
+    for candidate in candidates:
+        for variant in _vernacular_variants(candidate):
             terms.add_term(rank, variant)
 
 
