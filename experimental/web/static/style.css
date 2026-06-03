@@ -151,6 +151,16 @@ body {
     tab-size: 4;
 }
 
+.terminal-screen a {
+    color: var(--terminal-bright);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.terminal-screen a:hover {
+    color: var(--terminal-muted);
+}
+
 .terminal-input-row {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto auto;

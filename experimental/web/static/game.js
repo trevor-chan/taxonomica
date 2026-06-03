@@ -15,6 +15,7 @@ const PALETTES = [
     "volcano",
     "autumn-forest",
 ];
+const URL_PATTERN = /https?:\/\/[^\s<>"']+/g;
 
 function selectPalette() {
     let storedPalette = null;
@@ -38,8 +39,35 @@ function selectPalette() {
     document.documentElement.dataset.palette = palette;
 }
 
+function renderTerminalText(text) {
+    const fragment = document.createDocumentFragment();
+    let currentIndex = 0;
+
+    for (const match of text.matchAll(URL_PATTERN)) {
+        const url = match[0];
+        const urlIndex = match.index;
+        if (urlIndex > currentIndex) {
+            fragment.append(document.createTextNode(text.slice(currentIndex, urlIndex)));
+        }
+
+        const link = document.createElement("a");
+        link.href = url;
+        link.textContent = url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        fragment.append(link);
+        currentIndex = urlIndex + url.length;
+    }
+
+    if (currentIndex < text.length) {
+        fragment.append(document.createTextNode(text.slice(currentIndex)));
+    }
+
+    screenEl.replaceChildren(fragment);
+}
+
 function renderTerminal(data) {
-    screenEl.textContent = data.screen || "";
+    renderTerminalText(data.screen || "");
     promptEl.textContent = data.prompt || ">";
     inputEl.value = "";
     window.requestAnimationFrame(() => {
@@ -49,13 +77,13 @@ function renderTerminal(data) {
 }
 
 function renderError(message) {
-    screenEl.textContent = [
+    renderTerminalText([
         "Taxonomica web terminal error:",
         "",
         message,
         "",
         "Try reloading the page or pressing Reset.",
-    ].join("\n");
+    ].join("\n"));
     promptEl.textContent = ">";
     inputEl.focus();
 }
@@ -115,7 +143,10 @@ resetButton.addEventListener("click", () => {
     resetSession();
 });
 
-document.addEventListener("click", () => {
+document.addEventListener("click", (event) => {
+    if (event.target.closest("a")) {
+        return;
+    }
     inputEl.focus();
 });
 
