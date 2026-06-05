@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import sqlite3
 
+from build_tree.build_runtime_db import _new_taxon, _populate_common_names
 from taxonomica.game.selection import select_playable_species
 from taxonomica.runtime_db import RuntimeTaxonomyData
 
@@ -115,6 +116,45 @@ def test_default_runtime_can_load_compressed_database_in_memory(tmp_path):
     assert data.tree.find_by_id("s-panthera-leo") is not None
     assert data.target_species_count == 5
     assert not (tmp_path / "assets" / "generated" / "runtime").exists()
+
+
+def test_runtime_build_adds_manual_common_name_for_actinopterygii(tmp_path):
+    taxa = {
+        "c-actinopterygii": _new_taxon(
+            "c-actinopterygii",
+            "class",
+            "Actinopterygii",
+        )
+    }
+
+    common_name_count = _populate_common_names(
+        gbif_backbone=tmp_path / "missing-gbif-backbone",
+        taxa=taxa,
+        taxon_gbif_ids={},
+    )
+
+    assert common_name_count == 1
+    assert taxa["c-actinopterygii"]["common_name"] == "Ray-finned Fishes"
+
+
+def test_runtime_build_keeps_existing_common_name_for_actinopterygii(tmp_path):
+    taxa = {
+        "c-actinopterygii": _new_taxon(
+            "c-actinopterygii",
+            "class",
+            "Actinopterygii",
+        )
+    }
+    taxa["c-actinopterygii"]["common_name"] = "Existing name"
+
+    common_name_count = _populate_common_names(
+        gbif_backbone=tmp_path / "missing-gbif-backbone",
+        taxa=taxa,
+        taxon_gbif_ids={},
+    )
+
+    assert common_name_count == 0
+    assert taxa["c-actinopterygii"]["common_name"] == "Existing name"
 
 
 def _write_runtime_fixture(db_path):

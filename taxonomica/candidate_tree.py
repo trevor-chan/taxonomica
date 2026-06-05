@@ -24,6 +24,68 @@ csv.field_size_limit(sys.maxsize)
 GBIF_ID_RE = re.compile(r"(?:^|,)gbif:([^,]+)")
 MAJOR_PARENT_RANKS = ["kingdom", "phylum", "class", "order", "family", "genus"]
 MAJOR_RANKS = [*MAJOR_PARENT_RANKS, "species"]
+ACTINOPTERYGII_ORDERS = frozenset(
+    {
+        "Acipenseriformes",
+        "Albuliformes",
+        "Alepocephaliformes",
+        "Amiiformes",
+        "Anguilliformes",
+        "Argentiniformes",
+        "Ateleopodiformes",
+        "Atheriniformes",
+        "Atherinopsiformes",
+        "Aulopiformes",
+        "Batrachoidiformes",
+        "Beloniformes",
+        "Beryciformes",
+        "Carangiformes",
+        "Centrarchiformes",
+        "Cetomimiformes",
+        "Characiformes",
+        "Cichliformes",
+        "Clupeiformes",
+        "Cypriniformes",
+        "Cyprinodontiformes",
+        "Elopiformes",
+        "Esociformes",
+        "Gadiformes",
+        "Gasterosteiformes",
+        "Gobiiformes",
+        "Gobiesociformes",
+        "Gonorynchiformes",
+        "Gymnotiformes",
+        "Holocentriformes",
+        "Kurtiformes",
+        "Labriformes",
+        "Lampriformes",
+        "Lepisosteiformes",
+        "Lophiiformes",
+        "Mugiliformes",
+        "Myctophiformes",
+        "Notacanthiformes",
+        "Ophidiiformes",
+        "Osmeriformes",
+        "Osteoglossiformes",
+        "Perciformes",
+        "Percopsiformes",
+        "Pleuronectiformes",
+        "Polymixiiformes",
+        "Polypteriformes",
+        "Saccopharyngiformes",
+        "Salmoniformes",
+        "Scombriformes",
+        "Scorpaeniformes",
+        "Siluriformes",
+        "Spariformes",
+        "Stephanoberyciformes",
+        "Stomiiformes",
+        "Syngnathiformes",
+        "Synbranchiformes",
+        "Tetraodontiformes",
+        "Zeiformes",
+    }
+)
 MATCH_TYPE_PRIORITY = {
     "gbif_id": 0,
     "gbif_accepted_id": 1,
@@ -519,7 +581,7 @@ def _count_tree_nodes_and_edges(
         path_nodes = [tuple(pairs[:index]) for index in range(1, len(pairs) + 1)]
         for node_path in path_nodes:
             node_counts[node_path] += 1
-        for parent, child in zip(path_nodes, path_nodes[1:]):
+        for parent, child in zip(path_nodes, path_nodes[1:], strict=False):
             edge_counts[(parent, child)] += 1
 
     return node_counts, edge_counts
@@ -532,7 +594,7 @@ def _path_from_gbif_row(row: dict[str, str]) -> MajorRankPath | None:
     values = {
         "kingdom": row.get("kingdom", "").strip(),
         "phylum": row.get("phylum", "").strip(),
-        "class_name": row.get("class", "").strip(),
+        "class_name": _class_from_gbif_row(row),
         "order": row.get("order", "").strip(),
         "family": row.get("family", "").strip(),
         "genus": row.get("genus", "").strip(),
@@ -542,6 +604,26 @@ def _path_from_gbif_row(row: dict[str, str]) -> MajorRankPath | None:
         return None
 
     return MajorRankPath(**values)
+
+
+def _class_from_gbif_row(row: dict[str, str]) -> str:
+    class_name = row.get("class", "").strip()
+    if class_name:
+        return class_name
+
+    if _is_actinopterygii_fallback_row(row):
+        return "Actinopterygii"
+
+    return ""
+
+
+def _is_actinopterygii_fallback_row(row: dict[str, str]) -> bool:
+    """Infer the missing class for GBIF bony-fish rows with complete lower ranks."""
+    return (
+        row.get("kingdom", "").strip() == "Animalia"
+        and row.get("phylum", "").strip() == "Chordata"
+        and row.get("order", "").strip() in ACTINOPTERYGII_ORDERS
+    )
 
 
 def _is_accepted_species_row(row: dict[str, str]) -> bool:

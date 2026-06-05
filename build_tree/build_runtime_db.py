@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Build a slim playable runtime database from the assembled description DB."""
+# ruff: noqa: E402,I001
 
 from __future__ import annotations
 
@@ -68,6 +69,9 @@ COMMON_NAME_CATEGORY_TERMS = {
     "prey",
     "weed",
     "weeds",
+}
+MANUAL_COMMON_NAMES = {
+    ("class", "Actinopterygii"): "Ray-finned Fishes",
 }
 
 csv.field_size_limit(sys.maxsize)
@@ -178,7 +182,7 @@ def build_runtime_db(
 
             parent_key = "0"
             path_pairs: list[tuple[str, str]] = []
-            for rank, name in zip(MAJOR_RANKS, path):
+            for rank, name in zip(MAJOR_RANKS, path, strict=True):
                 path_pairs.append((rank, name))
                 taxon_key = row["target_key"] if rank == "species" else _taxon_key(path_pairs)
                 taxon = taxa.setdefault(taxon_key, _new_taxon(taxon_key, rank, name))
@@ -502,9 +506,12 @@ def compress_runtime_db(source: Path, output: Path, *, force: bool) -> None:
             raise FileExistsError(f"{output} already exists; pass --force to rebuild")
         output.unlink()
     output.parent.mkdir(parents=True, exist_ok=True)
-    with open(source, "rb") as source_file:
-        with gzip.open(output, "wb", compresslevel=9) as output_file:
-            shutil.copyfileobj(source_file, output_file)
+    with open(source, "rb") as source_file, gzip.open(
+        output,
+        "wb",
+        compresslevel=9,
+    ) as output_file:
+        shutil.copyfileobj(source_file, output_file)
 
 
 def _taxon_key(path_pairs: list[tuple[str, str]]) -> str:
@@ -681,14 +688,14 @@ def _populate_common_names(
 ) -> int:
     """Attach one English common name to runtime taxa when GBIF provides one."""
     if not gbif_backbone.exists():
-        return 0
+        return _apply_manual_common_names(taxa)
 
     parent_gbif_ids = _resolve_parent_gbif_ids(gbif_backbone, taxa, taxon_gbif_ids)
     taxon_gbif_ids.update(parent_gbif_ids)
 
     wanted_gbif_ids = {gbif_id for gbif_id in taxon_gbif_ids.values() if gbif_id}
     if not wanted_gbif_ids:
-        return 0
+        return _apply_manual_common_names(taxa)
 
     ranks_by_gbif_id = {
         gbif_id: str(taxon["rank"])
@@ -707,6 +714,24 @@ def _populate_common_names(
         if common_name and taxon is not None:
             taxon["common_name"] = common_name
             common_name_count += 1
+
+    return common_name_count + _apply_manual_common_names(taxa)
+
+
+def _apply_manual_common_names(taxa: dict[str, dict[str, object]]) -> int:
+    common_name_count = 0
+    for taxon in taxa.values():
+        if taxon["common_name"]:
+            continue
+
+        manual_name = MANUAL_COMMON_NAMES.get(
+            (str(taxon["rank"]), str(taxon["scientific_name"]))
+        )
+        if not manual_name:
+            continue
+
+        taxon["common_name"] = manual_name
+        common_name_count += 1
 
     return common_name_count
 
