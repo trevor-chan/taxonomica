@@ -56,10 +56,13 @@ CATEGORY_MODIFIERS = {
         "Cetacea",
         "Felidae",
         "Primates",
+        "Arachnida",
+        "Hymenoptera",
     },
     -1: {
         "Plantae",
         "Aves",
+        "Actinopterygii",
     },
     -2: {
         "Archaea",

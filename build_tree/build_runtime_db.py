@@ -9,6 +9,7 @@ import csv
 import gzip
 import json
 import math
+import re
 import shutil
 import sqlite3
 import sys
@@ -27,6 +28,7 @@ from taxonomica.difficulty import (
     difficulty_for_target_rank,
     normalized_category_score,
 )
+from taxonomica.candidate_tree import ACTINOPTERYGII_ORDERS
 
 DEFAULT_DUMP_DATE = "20260501"
 DEFAULT_ASSEMBLED_DB = (
@@ -73,6 +75,7 @@ COMMON_NAME_CATEGORY_TERMS = {
 MANUAL_COMMON_NAMES = {
     ("class", "Actinopterygii"): "Ray-finned Fishes",
 }
+TITLE_DISAMBIGUATOR_RE = re.compile(r"\s+\([^)]*\)\s*$")
 
 csv.field_size_limit(sys.maxsize)
 
@@ -154,6 +157,7 @@ def build_runtime_db(
     parents: dict[str, str] = {}
     descriptions: dict[str, tuple[object, ...]] = {}
     taxon_gbif_ids: dict[str, str] = {}
+    taxon_wikipedia_common_names: dict[str, str] = {}
     eligible_target_keys: set[str] = set()
     skipped_bad_paths = 0
 
@@ -165,6 +169,8 @@ def build_runtime_db(
                 t.target_key,
                 t.scientific_name,
                 t.gbif_id,
+                t.primary_title,
+                t.matched_title,
                 COALESCE(t.pageview_count, 0) AS pageview_count,
                 t.path_json
             FROM taxon_targets t
@@ -195,6 +201,12 @@ def build_runtime_db(
             species_taxon = taxa[row["target_key"]]
             species_taxon["pageview_count"] = int(row["pageview_count"] or 0)
             species_taxon["category_modifier"] = category_modifier_for_path(path)
+            wikipedia_common_name = _common_name_from_wikipedia_title(
+                row["matched_title"] or row["primary_title"],
+                row["scientific_name"],
+            )
+            if wikipedia_common_name:
+                taxon_wikipedia_common_names[row["target_key"]] = wikipedia_common_name
             if row["gbif_id"]:
                 taxon_gbif_ids[row["target_key"]] = row["gbif_id"]
 
@@ -286,6 +298,7 @@ def build_runtime_db(
         gbif_backbone=gbif_backbone,
         taxa=taxa,
         taxon_gbif_ids=taxon_gbif_ids,
+        taxon_wikipedia_common_names=taxon_wikipedia_common_names,
     )
     score_summary = _score_species(
         taxa=taxa,
@@ -685,37 +698,59 @@ def _populate_common_names(
     gbif_backbone: Path,
     taxa: dict[str, dict[str, object]],
     taxon_gbif_ids: dict[str, str],
+    taxon_wikipedia_common_names: dict[str, str] | None = None,
 ) -> int:
     """Attach one English common name to runtime taxa when GBIF provides one."""
-    if not gbif_backbone.exists():
-        return _apply_manual_common_names(taxa)
-
-    parent_gbif_ids = _resolve_parent_gbif_ids(gbif_backbone, taxa, taxon_gbif_ids)
-    taxon_gbif_ids.update(parent_gbif_ids)
-
-    wanted_gbif_ids = {gbif_id for gbif_id in taxon_gbif_ids.values() if gbif_id}
-    if not wanted_gbif_ids:
-        return _apply_manual_common_names(taxa)
-
-    ranks_by_gbif_id = {
-        gbif_id: str(taxon["rank"])
-        for taxon_key, gbif_id in taxon_gbif_ids.items()
-        if gbif_id and (taxon := taxa.get(taxon_key)) is not None
-    }
-    common_names = _load_english_common_names(
-        gbif_backbone,
-        wanted_gbif_ids,
-        ranks_by_gbif_id,
-    )
     common_name_count = 0
-    for taxon_key, gbif_id in taxon_gbif_ids.items():
-        common_name = common_names.get(gbif_id)
-        taxon = taxa.get(taxon_key)
-        if common_name and taxon is not None:
-            taxon["common_name"] = common_name
-            common_name_count += 1
+    if gbif_backbone.exists():
+        parent_gbif_ids = _resolve_parent_gbif_ids(gbif_backbone, taxa, taxon_gbif_ids)
+        taxon_gbif_ids.update(parent_gbif_ids)
 
+        wanted_gbif_ids = {gbif_id for gbif_id in taxon_gbif_ids.values() if gbif_id}
+        if wanted_gbif_ids:
+            ranks_by_gbif_id = {
+                gbif_id: str(taxon["rank"])
+                for taxon_key, gbif_id in taxon_gbif_ids.items()
+                if gbif_id and (taxon := taxa.get(taxon_key)) is not None
+            }
+            common_names = _load_english_common_names(
+                gbif_backbone,
+                wanted_gbif_ids,
+                ranks_by_gbif_id,
+            )
+            for taxon_key, gbif_id in taxon_gbif_ids.items():
+                common_name = common_names.get(gbif_id)
+                taxon = taxa.get(taxon_key)
+                if common_name and taxon is not None:
+                    taxon["common_name"] = common_name
+                    common_name_count += 1
+
+    common_name_count += _apply_wikipedia_common_names(
+        taxa,
+        taxon_wikipedia_common_names or {},
+    )
     return common_name_count + _apply_manual_common_names(taxa)
+
+
+def _apply_wikipedia_common_names(
+    taxa: dict[str, dict[str, object]],
+    taxon_wikipedia_common_names: dict[str, str],
+) -> int:
+    common_name_count = 0
+    for taxon_key, common_name in taxon_wikipedia_common_names.items():
+        taxon = taxa.get(taxon_key)
+        if (
+            taxon is None
+            or taxon["common_name"]
+            or taxon["rank"] != "species"
+            or not common_name
+        ):
+            continue
+
+        taxon["common_name"] = common_name
+        common_name_count += 1
+
+    return common_name_count
 
 
 def _apply_manual_common_names(taxa: dict[str, dict[str, object]]) -> int:
@@ -796,12 +831,24 @@ def _gbif_parent_taxon_key(row: list[str], index: dict[str, int], rank: str) -> 
     path_pairs: list[tuple[str, str]] = []
     for path_rank in MAJOR_RANKS[: MAJOR_RANKS.index(rank) + 1]:
         name = _cell(row, index[path_rank])
+        if path_rank == "class" and not name:
+            name = _inferred_actinopterygii_class(row, index)
         if path_rank == rank and not name:
             name = _cell(row, index["canonicalName"]) or _cell(row, index["scientificName"])
         if not name:
             return ""
         path_pairs.append((path_rank, name))
     return _taxon_key(path_pairs)
+
+
+def _inferred_actinopterygii_class(row: list[str], index: dict[str, int]) -> str:
+    if (
+        _cell(row, index["kingdom"]) == "Animalia"
+        and _cell(row, index["phylum"]) == "Chordata"
+        and _cell(row, index["order"]) in ACTINOPTERYGII_ORDERS
+    ):
+        return "Actinopterygii"
+    return ""
 
 
 def _load_english_common_names(
@@ -876,6 +923,33 @@ def _looks_plural_common_name(normalized_name: str) -> bool:
         return False
     last_word = normalized_name.rsplit(" ", maxsplit=1)[-1]
     return last_word.endswith("s") and not last_word.endswith(("'s", "ss"))
+
+
+def _common_name_from_wikipedia_title(title: str, scientific_name: str) -> str:
+    common_name = TITLE_DISAMBIGUATOR_RE.sub("", title.replace("_", " ")).strip()
+    if not common_name:
+        return ""
+
+    normalized_common_name = _normalize_common_name(common_name)
+    normalized_scientific_name = _normalize_common_name(scientific_name)
+    common_name_terms = normalized_common_name.split()
+    scientific_name_terms = normalized_scientific_name.split()
+    if (
+        normalized_common_name == normalized_scientific_name
+        or (
+            len(common_name_terms) == 1
+            and scientific_name_terms
+            and common_name_terms[0] == scientific_name_terms[0]
+        )
+        or (
+            len(common_name_terms) >= 2
+            and common_name_terms[1] in scientific_name_terms[1:]
+        )
+        or normalized_common_name.startswith("list of ")
+    ):
+        return ""
+
+    return common_name
 
 
 def _cell(row: list[str], index: int) -> str:

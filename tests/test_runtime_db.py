@@ -3,7 +3,12 @@ from __future__ import annotations
 import gzip
 import sqlite3
 
-from build_tree.build_runtime_db import _new_taxon, _populate_common_names
+from build_tree.build_runtime_db import (
+    _common_name_from_wikipedia_title,
+    _new_taxon,
+    _populate_common_names,
+    _taxon_key,
+)
 from taxonomica.game.selection import select_playable_species
 from taxonomica.runtime_db import RuntimeTaxonomyData
 
@@ -155,6 +160,134 @@ def test_runtime_build_keeps_existing_common_name_for_actinopterygii(tmp_path):
 
     assert common_name_count == 0
     assert taxa["c-actinopterygii"]["common_name"] == "Existing name"
+
+
+def test_runtime_build_resolves_bony_fish_parent_common_names(tmp_path):
+    order_key = _taxon_key(
+        [
+            ("kingdom", "Animalia"),
+            ("phylum", "Chordata"),
+            ("class", "Actinopterygii"),
+            ("order", "Cypriniformes"),
+        ]
+    )
+    taxa = {
+        order_key: _new_taxon(
+            order_key,
+            "order",
+            "Cypriniformes",
+        )
+    }
+    gbif_backbone = tmp_path / "gbif-backbone"
+    gbif_backbone.mkdir()
+    (gbif_backbone / "Taxon.tsv").write_text(
+        "\t".join(
+            [
+                "taxonID",
+                "taxonRank",
+                "taxonomicStatus",
+                "scientificName",
+                "canonicalName",
+                "kingdom",
+                "phylum",
+                "class",
+                "order",
+                "family",
+                "genus",
+            ]
+        )
+        + "\n"
+        + "\t".join(
+            [
+                "1153",
+                "order",
+                "accepted",
+                "Cypriniformes",
+                "Cypriniformes",
+                "Animalia",
+                "Chordata",
+                "",
+                "Cypriniformes",
+                "",
+                "",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (gbif_backbone / "VernacularName.tsv").write_text(
+        "taxonID\tvernacularName\tlanguage\tcountryCode\n"
+        "1153\tCarp-Like Fish\ten\tUS\n",
+        encoding="utf-8",
+    )
+
+    common_name_count = _populate_common_names(
+        gbif_backbone=gbif_backbone,
+        taxa=taxa,
+        taxon_gbif_ids={},
+    )
+
+    assert common_name_count == 1
+    assert taxa[order_key]["common_name"] == "Carp-Like Fish"
+
+
+def test_runtime_build_adds_wikipedia_title_fallback_for_species(tmp_path):
+    taxa = {
+        "species:Q169444": _new_taxon(
+            "species:Q169444",
+            "species",
+            "Danio rerio",
+        )
+    }
+
+    common_name_count = _populate_common_names(
+        gbif_backbone=tmp_path / "missing-gbif-backbone",
+        taxa=taxa,
+        taxon_gbif_ids={},
+        taxon_wikipedia_common_names={"species:Q169444": "Zebrafish"},
+    )
+
+    assert common_name_count == 1
+    assert taxa["species:Q169444"]["common_name"] == "Zebrafish"
+
+
+def test_runtime_build_keeps_gbif_name_over_wikipedia_title_fallback(tmp_path):
+    taxa = {
+        "species:Q169444": _new_taxon(
+            "species:Q169444",
+            "species",
+            "Danio rerio",
+        )
+    }
+    gbif_backbone = tmp_path / "gbif-backbone"
+    gbif_backbone.mkdir()
+    (gbif_backbone / "VernacularName.tsv").write_text(
+        "taxonID\tvernacularName\tlanguage\tcountryCode\n"
+        "9797255\tzebra danio\ten\tUS\n",
+        encoding="utf-8",
+    )
+
+    common_name_count = _populate_common_names(
+        gbif_backbone=gbif_backbone,
+        taxa=taxa,
+        taxon_gbif_ids={"species:Q169444": "9797255"},
+        taxon_wikipedia_common_names={"species:Q169444": "Zebrafish"},
+    )
+
+    assert common_name_count == 1
+    assert taxa["species:Q169444"]["common_name"] == "zebra danio"
+
+
+def test_wikipedia_title_common_name_strips_disambiguators_and_scientific_titles():
+    assert _common_name_from_wikipedia_title("Basa (fish)", "Pangasius bocourti") == "Basa"
+    assert _common_name_from_wikipedia_title("Danio rerio", "Danio rerio") == ""
+    assert (
+        _common_name_from_wikipedia_title(
+            "Opsarius caudiocellatus",
+            "Barilius caudiocellatus",
+        )
+        == ""
+    )
 
 
 def _write_runtime_fixture(db_path):
