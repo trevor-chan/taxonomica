@@ -5,8 +5,8 @@ from __future__ import annotations
 DIFFICULTY_LEVELS = ("easy", "medium", "hard", "expert")
 
 DIFFICULTY_SCORE_WEIGHTS = {
-    "pageviews": 0.50,
-    "article_length": 0.15,
+    "pageviews": 0.55,
+    "article_length": 0.10,
     "vernacular": 0.10,
     "category": 0.25,
 }
@@ -58,11 +58,12 @@ CATEGORY_MODIFIERS = {
         "Primates",
         "Arachnida",
         "Hymenoptera",
+        "Reptilia",
+        "Amphibia",
     },
     -1: {
         "Plantae",
         "Aves",
-        "Actinopterygii",
     },
     -2: {
         "Archaea",
@@ -72,6 +73,7 @@ CATEGORY_MODIFIERS = {
         "Chromista",
         "Protozoa",
         "Fungi",
+        "Actinopterygii",
     },
 }
 
